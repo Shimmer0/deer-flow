@@ -11,6 +11,7 @@ from typing import Any
 
 _HARNESS_CONTAINER_PATH = "/mnt/harness-workbench"
 _PROMPT_CONTAINER_PATH = "/mnt/prompt-workbench"
+_GPT_PRO_CONTAINER_PATH = "/mnt/gpt-pro"
 _MAX_TIMEOUT_SECONDS = 60
 _MAX_OUTPUT_CHARS = 12000
 
@@ -35,6 +36,7 @@ def _allowed_mounts() -> list[tuple[str, Path]]:
     mounts = [
         (_HARNESS_CONTAINER_PATH, root / "harness-workbench"),
         (_PROMPT_CONTAINER_PATH, root / "prompt-workbench"),
+        (_GPT_PRO_CONTAINER_PATH, root / "docs" / "GPT_PRO"),
     ]
     try:
         from deerflow.config import get_app_config
@@ -77,7 +79,7 @@ def _resolve_script_path(script_path: str) -> Path:
             raise FileNotFoundError(f"Python script not found: {script_path}")
         return candidate
 
-    raise PermissionError("Python script path must be under /mnt/harness-workbench or /mnt/prompt-workbench")
+    raise PermissionError("Python script path must be under /mnt/harness-workbench, /mnt/prompt-workbench, or /mnt/gpt-pro")
 
 
 def _safe_args(args: list[str] | str | None) -> list[str]:
