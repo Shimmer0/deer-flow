@@ -28,7 +28,24 @@ from deerflow.config.token_usage_config import TokenUsageConfig
 from deerflow.config.tool_config import ToolConfig, ToolGroupConfig
 from deerflow.config.tool_search_config import ToolSearchConfig, load_tool_search_config_from_dict
 
-load_dotenv()
+def _load_deerflow_dotenv() -> None:
+    explicit_path = os.getenv("DEER_FLOW_DOTENV_PATH")
+    if explicit_path:
+        load_dotenv(explicit_path)
+        return
+
+    current_file = Path(__file__).resolve()
+    for parent in current_file.parents:
+        if (parent / "config.example.yaml").is_file() or (parent / "config.yaml").is_file():
+            dotenv_path = parent / ".env"
+            if dotenv_path.is_file():
+                load_dotenv(dotenv_path)
+                return
+
+    load_dotenv()
+
+
+_load_deerflow_dotenv()
 
 logger = logging.getLogger(__name__)
 
