@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import posixpath
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -14,6 +16,9 @@ _HARNESS_CONTAINER_PATH = "/mnt/harness-workbench"
 _GPT_PRO_CONTAINER_PATH = "/mnt/gpt-pro"
 _DEFAULT_ENDPOINT = "http://127.0.0.1:8765"
 _MAX_TIMEOUT_SECONDS = 900.0
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+_MAX_REGIONS = 200
+_AXIS_LABEL_RE = re.compile(r"^(?:[A-Z]|[0-9]{1,2})$")
 
 
 def _lab_root() -> Path:
@@ -63,6 +68,8 @@ def _resolve_endpoint(endpoint: str | None) -> str:
         raise PermissionError("OCR requests are limited to a local PaddleOCR endpoint")
     if parsed.port is None:
         raise ValueError("PaddleOCR endpoint must include an explicit port")
+    if parsed.username or parsed.password or parsed.path or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("PaddleOCR endpoint must be a bare local origin, for example http://127.0.0.1:8765")
     return raw
 
 
@@ -71,6 +78,22 @@ def _timeout(value: float | int) -> float:
     if seconds <= 0 or seconds > _MAX_TIMEOUT_SECONDS:
         raise ValueError(f"timeout_seconds must be between 0 and {_MAX_TIMEOUT_SECONDS}")
     return seconds
+
+
+def _confidence_threshold(value: float | int) -> float:
+    threshold = float(value)
+    if not math.isfinite(threshold) or threshold < 0 or threshold > 1:
+        raise ValueError("min_confidence must be between 0 and 1")
+    return threshold
+
+
+def _expected_content(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized not in {"axis_labels"}:
+        raise ValueError("expected_content must be omitted or set to axis_labels")
+    return normalized
 
 
 def _json_obj(value: dict[str, Any] | str | None, name: str) -> dict[str, Any] | None:
@@ -94,6 +117,8 @@ def _regions(value: list[dict[str, Any]] | str | None) -> list[dict[str, Any]] |
         parsed = value
     if not isinstance(parsed, list):
         raise ValueError("regions must be a JSON array")
+    if len(parsed) > _MAX_REGIONS:
+        raise ValueError(f"regions must contain at most {_MAX_REGIONS} items")
 
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(parsed):
@@ -103,6 +128,10 @@ def _regions(value: list[dict[str, Any]] | str | None) -> list[dict[str, Any]] |
         if not isinstance(bbox, list) or len(bbox) != 4:
             raise ValueError(f"regions[{index}].bbox must be [x0, y0, x1, y1]")
         x0, y0, x1, y1 = [float(part) for part in bbox]
+        if not all(math.isfinite(part) for part in [x0, y0, x1, y1]):
+            raise ValueError(f"regions[{index}].bbox must contain finite numbers")
+        if x0 < 0 or y0 < 0:
+            raise ValueError(f"regions[{index}].bbox must not contain negative coordinates")
         if x1 <= x0 or y1 <= y0:
             raise ValueError(f"regions[{index}].bbox must have positive width and height")
         normalized.append(
@@ -126,9 +155,12 @@ def _post_json(endpoint: str, route: str, payload: dict[str, Any], timeout_secon
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read().decode("utf-8")
+            body_bytes = response.read(_MAX_RESPONSE_BYTES + 1)
     except urllib.error.URLError as error:
         raise ConnectionError(f"PaddleOCR local endpoint request failed: {error}") from error
+    if len(body_bytes) > _MAX_RESPONSE_BYTES:
+        raise ValueError("PaddleOCR response exceeded maximum size")
+    body = body_bytes.decode("utf-8")
     decoded = json.loads(body)
     if not isinstance(decoded, dict):
         raise ValueError("PaddleOCR response must be a JSON object")
@@ -139,18 +171,24 @@ def _float_or_none(value: Any) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
 
 
 def _bbox(value: Any) -> list[float] | None:
     if not isinstance(value, list) or len(value) != 4:
         return None
     try:
-        return [float(part) for part in value]
+        bbox = [float(part) for part in value]
     except (TypeError, ValueError):
         return None
+    if not all(math.isfinite(part) for part in bbox):
+        return None
+    return bbox
 
 
 def _normalize_text_units(units: Any, *, image_path: str) -> list[dict[str, Any]]:
@@ -180,6 +218,59 @@ def _normalize_text_units(units: Any, *, image_path: str) -> list[dict[str, Any]
     return normalized
 
 
+def _quality_summary(
+    text_units: list[dict[str, Any]],
+    *,
+    min_confidence: float,
+    expected_content: str | None,
+) -> dict[str, Any]:
+    high_confidence_count = 0
+    low_confidence_count = 0
+    unscored_count = 0
+    empty_bbox_count = 0
+    axis_label_candidate_count = 0
+
+    for unit in text_units:
+        confidence = unit.get("confidence")
+        if confidence is None:
+            unscored_count += 1
+            confident = False
+        else:
+            confident = float(confidence) >= min_confidence
+            if confident:
+                high_confidence_count += 1
+            else:
+                low_confidence_count += 1
+        if unit.get("bbox") is None:
+            empty_bbox_count += 1
+        if confident and _AXIS_LABEL_RE.match(str(unit.get("text") or "").strip()):
+            axis_label_candidate_count += 1
+
+    warnings: list[str] = []
+    if low_confidence_count:
+        warnings.append("low_confidence_text_units_present")
+    if unscored_count:
+        warnings.append("unscored_text_units_present")
+    if empty_bbox_count:
+        warnings.append("text_units_missing_bbox")
+    if expected_content == "axis_labels" and axis_label_candidate_count == 0:
+        warnings.append("no_axis_label_candidates")
+        if high_confidence_count:
+            warnings.append("high_confidence_non_axis_text")
+
+    return {
+        "expected_content": expected_content,
+        "min_confidence": min_confidence,
+        "text_unit_count": len(text_units),
+        "high_confidence_count": high_confidence_count,
+        "low_confidence_count": low_confidence_count,
+        "unscored_count": unscored_count,
+        "empty_bbox_count": empty_bbox_count,
+        "axis_label_candidate_count": axis_label_candidate_count,
+        "warnings": warnings,
+    }
+
+
 def recognize_sheet_text(
     image_path: str,
     regions: list[dict[str, Any]] | str | None = None,
@@ -187,11 +278,15 @@ def recognize_sheet_text(
     ocr_config_override: dict[str, Any] | str | None = None,
     include_text_units: bool = True,
     timeout_seconds: float = 600.0,
+    min_confidence: float = 0.5,
+    expected_content: str | None = None,
 ) -> dict[str, Any]:
     """Recognize drawing text through a local PaddleOCR runtime endpoint."""
     resolved_image = _resolve_input_path(image_path)
     resolved_endpoint = _resolve_endpoint(endpoint)
     timeout = _timeout(timeout_seconds)
+    confidence_threshold = _confidence_threshold(min_confidence)
+    content_hint = _expected_content(expected_content)
     normalized_regions = _regions(regions)
     override = _json_obj(ocr_config_override, "ocr_config_override")
 
@@ -215,9 +310,18 @@ def recognize_sheet_text(
 
     response = _post_json(resolved_endpoint, route, payload, timeout)
     text_units = _normalize_text_units(response.get("text_units", []), image_path=image_path)
+    quality_summary = _quality_summary(
+        text_units,
+        min_confidence=confidence_threshold,
+        expected_content=content_hint,
+    )
     ok = bool(response.get("ok", True))
+    requires_review = bool(ok and content_hint and quality_summary["warnings"])
+    status = "fail"
+    if ok:
+        status = "review" if requires_review else "pass"
     return {
-        "status": "pass" if ok else "fail",
+        "status": status,
         "tool": "recognize_sheet_text",
         "mode": mode,
         "backend": response.get("backend"),
@@ -225,6 +329,8 @@ def recognize_sheet_text(
         "endpoint": resolved_endpoint,
         "text_unit_count": len(text_units),
         "text_units": text_units,
+        "quality_summary": quality_summary,
+        "requires_review": requires_review,
         "runtime_metadata": response.get("metadata", {}),
         "runtime_profile": response.get("profile", {}),
         "raw_result_count": response.get("result_count"),
@@ -238,6 +344,8 @@ def _recognize_sheet_text_tool(
     ocr_config_override: dict[str, Any] | str | None = None,
     include_text_units: bool = True,
     timeout_seconds: float = 600.0,
+    min_confidence: float = 0.5,
+    expected_content: str | None = None,
 ) -> str:
     """Recognize drawing text via local PaddleOCR runtime.
 
@@ -248,6 +356,8 @@ def _recognize_sheet_text_tool(
         ocr_config_override: Optional PaddleOCR runtime config override.
         include_text_units: Include normalized text units in the response.
         timeout_seconds: HTTP request timeout, max 900 seconds.
+        min_confidence: Confidence threshold used by quality_summary.
+        expected_content: Set to axis_labels when OCR output is expected to feed axis label detection.
     """
     result = recognize_sheet_text(
         image_path=image_path,
@@ -256,6 +366,8 @@ def _recognize_sheet_text_tool(
         ocr_config_override=ocr_config_override,
         include_text_units=include_text_units,
         timeout_seconds=timeout_seconds,
+        min_confidence=min_confidence,
+        expected_content=expected_content,
     )
     return json.dumps(result, ensure_ascii=False, sort_keys=True)
 

@@ -167,6 +167,48 @@ def test_recognize_sheet_text_output_feeds_axis_label_detection(tmp_path: Path) 
     assert detected["ignored_count"] == 1
 
 
+def test_recognize_sheet_text_marks_axis_label_ocr_for_review(tmp_path: Path) -> None:
+    module = _load_paddleocr_module()
+    image = _png(tmp_path / "sheet.png")
+    response = {
+        "ok": True,
+        "backend": "paddle_local_server",
+        "text_units": [
+            {"text": "-", "confidence": 0.53, "bbox": [10, 20, 30, 40], "bbox_space": "image"},
+            {"text": "02020 20", "confidence": 0.31, "bbox": [50, 20, 110, 40], "bbox_space": "image"},
+        ],
+    }
+
+    with _FakeOcrRuntime(response) as runtime:
+        result = module.recognize_sheet_text(
+            str(image),
+            endpoint=runtime.endpoint,
+            expected_content="axis_labels",
+            min_confidence=0.5,
+        )
+
+    assert result["status"] == "review"
+    assert result["quality_summary"]["axis_label_candidate_count"] == 0
+    assert result["quality_summary"]["low_confidence_count"] == 1
+    assert "no_axis_label_candidates" in result["quality_summary"]["warnings"]
+
+
+def test_recognize_sheet_text_rejects_container_path_escape(tmp_path: Path) -> None:
+    module = _load_paddleocr_module()
+    _png(tmp_path / "sheet.png")
+
+    with pytest.raises(PermissionError, match="Image path must be under"):
+        module.recognize_sheet_text("/mnt/gpt-pro/../sheet.png", endpoint="http://127.0.0.1:8765")
+
+
+def test_recognize_sheet_text_rejects_endpoint_path_or_query(tmp_path: Path) -> None:
+    module = _load_paddleocr_module()
+    image = _png(tmp_path / "sheet.png")
+
+    with pytest.raises(ValueError, match="bare local origin"):
+        module.recognize_sheet_text(str(image), endpoint="http://127.0.0.1:8765/ocr?x=1")
+
+
 def test_recognize_sheet_text_rejects_non_local_endpoint(tmp_path: Path) -> None:
     module = _load_paddleocr_module()
     image = _png(tmp_path / "sheet.png")
