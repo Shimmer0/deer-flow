@@ -5,6 +5,7 @@ import { type ReactNode } from "react";
 import { AuthProvider } from "@/core/auth/AuthProvider";
 import { getServerSideUser } from "@/core/auth/server";
 import { assertNever } from "@/core/auth/types";
+import { getReadAgentLoginRedirectPath } from "@/features/read-agent/model";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export default async function AuthLayout({
 
   switch (result.tag) {
     case "authenticated":
-      redirect("/workspace");
+      redirect(getReadAgentLoginRedirectPath());
     case "needs_setup":
       // Allow access to setup page
       return <AuthProvider initialUser={result.user}>{children}</AuthProvider>;

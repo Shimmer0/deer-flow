@@ -37,6 +37,20 @@ if [ -f "$REPO_ROOT/.env" ]; then
     set +a
 fi
 
+find_pnpm_command() {
+    if command -v pnpm >/dev/null 2>&1; then
+        echo "pnpm"
+    elif command -v pnpm.cmd >/dev/null 2>&1; then
+        echo "pnpm.cmd"
+    elif command -v corepack >/dev/null 2>&1; then
+        echo "corepack pnpm"
+    elif command -v corepack.cmd >/dev/null 2>&1; then
+        echo "corepack.cmd pnpm"
+    else
+        return 1
+    fi
+}
+
 # ── Argument parsing ─────────────────────────────────────────────────────────
 
 DEV_MODE=true
@@ -71,6 +85,41 @@ _kill_port() {
     fi
 }
 
+_port_in_use() {
+    local port=$1
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    elif command -v ss >/dev/null 2>&1; then
+        ss -ltn "sport = :$port" 2>/dev/null | awk 'NR > 1 { found = 1 } END { exit found ? 0 : 1 }'
+    else
+        nc -z 127.0.0.1 "$port" >/dev/null 2>&1
+    fi
+}
+
+_show_port_owner() {
+    local port=$1
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+    elif command -v ss >/dev/null 2>&1; then
+        ss -ltnp "sport = :$port" 2>/dev/null || true
+    fi
+}
+
+_assert_port_free() {
+    local name=$1 port=$2
+    if _port_in_use "$port"; then
+        local lab_root
+        lab_root="$(cd "$REPO_ROOT/.." >/dev/null 2>&1 && pwd -P)"
+        echo "✗ Cannot start $name: localhost:$port is already in use."
+        _show_port_owner "$port" | sed 's/^/  /'
+        echo ""
+        echo "Stop existing services first, then retry:"
+        echo "  cd \"$REPO_ROOT\" && make stop"
+        echo "  cd \"$lab_root\" && bash scripts/stop.sh"
+        exit 1
+    fi
+}
+
 stop_all() {
     echo "Stopping all services..."
     pkill -f "uvicorn app.gateway.app:app" 2>/dev/null || true
@@ -101,6 +150,12 @@ if [ "$ACTION" = "restart" ]; then
     ALREADY_STOPPED=true
 fi
 
+PNPM_CMD="${PNPM_CMD:-$(find_pnpm_command || true)}"
+if [ -z "$PNPM_CMD" ]; then
+    echo "pnpm not found. Install pnpm or enable Corepack before starting frontend services."
+    exit 1
+fi
+
 # Mode label for banner
 if $DEV_MODE; then
     MODE_LABEL="DEV (Gateway runtime, hot-reload enabled)"
@@ -114,7 +169,7 @@ fi
 
 # Frontend command
 if $DEV_MODE; then
-    FRONTEND_CMD="pnpm run dev"
+    FRONTEND_CMD="$PNPM_CMD run dev"
 else
     if command -v python3 >/dev/null 2>&1; then
         PYTHON_BIN="python3"
@@ -124,7 +179,7 @@ else
         echo "Python is required to generate BETTER_AUTH_SECRET."
         exit 1
     fi
-    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') pnpm run preview"
+    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') $PNPM_CMD run preview"
 fi
 
 # Extra flags for uvicorn
@@ -160,7 +215,7 @@ fi
 if ! $SKIP_INSTALL; then
     echo "Syncing dependencies..."
     (cd backend && uv sync --quiet) || { echo "✗ Backend dependency install failed"; exit 1; }
-    (cd frontend && pnpm install --silent) || { echo "✗ Frontend dependency install failed"; exit 1; }
+    (cd frontend && $PNPM_CMD install --silent) || { echo "✗ Frontend dependency install failed"; exit 1; }
     echo "✓ Dependencies synced"
 else
     echo "⏩ Skipping dependency install (--skip-install)"
@@ -200,6 +255,7 @@ run_service() {
     local name="$1" cmd="$2" port="$3" timeout="$4"
 
     echo "Starting $name..."
+    _assert_port_free "$name" "$port"
     if $DAEMON_MODE; then
         nohup sh -c "$cmd" > /dev/null 2>&1 &
     else

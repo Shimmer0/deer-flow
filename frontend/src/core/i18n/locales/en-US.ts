@@ -49,7 +49,10 @@ export const enUS: Translations = {
     export: "Export",
     exportAsMarkdown: "Export as Markdown",
     exportAsJSON: "Export as JSON",
+    exportDebugJSON: "Export debug JSON",
+    exportDebugArchive: "Export debug ZIP",
     exportSuccess: "Conversation exported",
+    exportFailed: "Export failed",
   },
 
   // Home
@@ -346,6 +349,89 @@ export const enUS: Translations = {
     toggleSidebar: "Toggle Sidebar",
   },
 
+  readAgent: {
+    title: "Structural Drawing Reading Workbench",
+    compactTitle: "Drawing Reader",
+    projectSubtitle:
+      "Project-level drawing reading, evidence review, and object edits",
+    language: "Language",
+    project: "Project",
+    blueprint: "Blueprint",
+    floor: "Floor",
+    toolResponse: "Recognition tool",
+    recognitionTool: "Recognition tool",
+    uploadDrawing: "Upload drawing",
+    processingMode: "Processing",
+    editMode: "Edit",
+    replayTrace: "Replay progress",
+    panels: {
+      progress: "Reading progress",
+      semanticCanvas: "Semantic drawing view",
+      threeDPreview: "3D preview",
+      developerView: "Developer view",
+      jsonDiffAudit: "JSON / Diff / Audit",
+      inspector: "Object review and evidence",
+      operationPreview: "Pre-submit validation",
+      auditTrail: "Change history",
+      acceptanceMap: "Acceptance map",
+    },
+    helper: {
+      semanticCanvas:
+        "Select a beam, column, grid, or label, then review evidence and submit edits on the right.",
+      developerView:
+        "Inspect the raw semantic model, JSON diff, audit events, and API acceptance details.",
+      operationPreview:
+        "Shows the pending edit, validation result, and audit event before commit.",
+      auditTrail: "Committed edits are written to the audit trail for review.",
+      acceptanceMap:
+        "Maps GPT_PRO requirements to implementation, tests, and REST endpoints.",
+      schematicOnly:
+        "Schematic model only. Do not use for engineering calculations.",
+    },
+    fields: {
+      beamLabel: "Beam label",
+      section: "Section",
+      reviewStatus: "Review status",
+      confidence: "Confidence",
+      stageJson: "Stage JSON",
+      viewModel: "View model",
+      diff: "Diff",
+      patch: "Patch",
+      audit: "Audit",
+      restEndpoints: "REST endpoints",
+      implementedBy: "Implemented by",
+      testedBy: "Tested by",
+    },
+    actions: {
+      undo: "Undo",
+      redo: "Redo",
+      ocrRegion: "Recognize evidence region",
+      commit: "Commit edit",
+    },
+    status: {
+      candidate: "Candidate",
+      needsReview: "Needs review",
+      accepted: "Accepted",
+      rejected: "Rejected",
+    },
+    locks: {
+      lockedByYou: "Locked by you",
+      lockedByOther: (owner: string) => `Locked by ${owner}`,
+      available: "Available",
+    },
+    empty: {
+      noObject: "No object selected",
+      noOperations: "No committed edits",
+    },
+    counters: {
+      events: (count: number) => `${count} events`,
+      objects: (count: number) => `${count} objects`,
+      changedPaths: (count: number) => `${count} changed paths`,
+      diffSummary: (engine: string, paths: number, bytes: number) =>
+        `${engine} diff, ${paths} changed paths, ${bytes} bytes`,
+    },
+  },
+
   // Settings
   settings: {
     title: "Settings",
@@ -353,6 +439,7 @@ export const enUS: Translations = {
     sections: {
       account: "Account",
       appearance: "Appearance",
+      chat: "Chat",
       memory: "Memory",
       tools: "Tools",
       skills: "Skills",
@@ -450,6 +537,13 @@ export const enUS: Translations = {
       darkDescription: "Dim palette that reduces glare for focus.",
       languageTitle: "Language",
       languageDescription: "Switch between languages.",
+    },
+    chat: {
+      title: "Chat",
+      description: "Control assistant behaviors in chat threads.",
+      followupSuggestionsTitle: "Follow-up question suggestions",
+      followupSuggestionsDescription:
+        "Generate possible next questions after an assistant response.",
     },
     tools: {
       title: "Tools",

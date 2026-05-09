@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import importlib.util
+import json
 import sys
 from pathlib import Path
-
 
 LAB_ROOT = Path("/mnt/e/deerflow-agent-lab")
 DEERFLOW_ROOT = LAB_ROOT / "deer-flow"
@@ -108,3 +107,20 @@ def test_python_script_tool_runs_whitelisted_harness_script():
     )
     assert tool_result["exit_code"] == 0
     assert '"total_vertical_load_kN": 528.0' in tool_result["stdout"]
+
+
+def test_python_script_tool_uses_configured_interpreter(monkeypatch):
+    module_path = BACKEND_ROOT / "packages" / "harness" / "deerflow" / "tools" / "python_scripts.py"
+    spec = importlib.util.spec_from_file_location("python_script_tool_interpreter_under_test", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    paddleocr_python = Path("/home/s/miniconda3/envs/paddleocr/bin/python")
+    assert paddleocr_python.is_file()
+
+    monkeypatch.setenv("DEER_FLOW_PYTHON_INTERPRETER", str(paddleocr_python))
+
+    assert module._venv_python() == str(paddleocr_python)

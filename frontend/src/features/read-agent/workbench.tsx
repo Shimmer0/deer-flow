@@ -1,1058 +1,842 @@
 "use client";
 
-import {
-  Activity,
-  AlertTriangle,
-  Box,
-  CheckCircle2,
-  FileJson,
-  GitBranch,
-  Layers,
-  Pencil,
-  Redo2,
-  Search,
-  Undo2,
-  Wifi,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { WebGLRenderer } from "three";
+import { useEffect, useState } from "react";
 
 import {
-  ACCEPTANCE_MATRIX,
-  REST_ENDPOINTS,
-  type ReviewStatus,
-  type SemanticObject,
-  createInitialReadAgentState,
-  createOperationPreview,
-  commitOperationPreview,
-  getBlueprintsForFloor,
-  getSchematic3dNotice,
-  redoNextOperation,
-  requestOcrCandidate,
-  selectBlueprint,
-  selectFloor,
-  undoLastCommittedOperation,
-} from "./model";
+  allFloors,
+  createUpdateOperation,
+  findObject,
+  formatSection,
+  objectsForLayer,
+  projectToSummary,
+  viewBoxFor,
+} from "./adapters";
+import {
+  assetUrl,
+  commitOperation,
+  createProject,
+  createRun,
+  getProject,
+  getSemanticJson,
+  getViewModel,
+  listProjects,
+  openRunEventSource,
+  parseRunEvent,
+  previewOperation,
+  uploadBlueprints,
+} from "./api";
+import type {
+  OperationPreview,
+  ProjectRecord,
+  ProjectSummary,
+  RunEvent,
+  SemanticViewModel,
+  SemanticViewObject,
+} from "./types";
+import { SSE_EVENT_TYPES } from "./types";
 
-function cx(...parts: Array<string | false | null | undefined>) {
-  return parts.filter(Boolean).join(" ");
+type Mode = "processing" | "edit";
+
+function classNames(...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(" ");
 }
 
-function statusClass(status: ReviewStatus) {
-  if (status === "accepted") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "rejected") return "border-red-200 bg-red-50 text-red-700";
-  if (status === "candidate") return "border-amber-200 bg-amber-50 text-amber-700";
-  return "border-blue-200 bg-blue-50 text-blue-700";
-}
-
-function objectsOnSelection(
-  objects: Record<string, SemanticObject>,
-  floorId: string,
-  blueprintId: string,
-) {
-  return Object.values(objects).filter(
-    (object) => object.floorId === floorId && object.blueprintId === blueprintId,
+function JsonBlock({ value }: { value: unknown }) {
+  return (
+    <pre className="max-h-72 overflow-auto rounded bg-zinc-950 p-3 text-xs text-zinc-100">
+      {JSON.stringify(value, null, 2)}
+    </pre>
   );
 }
 
-function formatJson(value: unknown) {
-  return JSON.stringify(value, null, 2);
+function ProjectCreator({
+  onCreated,
+}: {
+  onCreated: (project: ProjectRecord) => void;
+}) {
+  const [name, setName] = useState("结构图纸项目");
+  const [buildingName, setBuildingName] = useState("主楼");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <h3 className="font-medium">1. 创建项目</h3>
+      <div className="mt-2 grid gap-2 text-sm">
+        <input
+          className="rounded border px-2 py-1"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="项目名称"
+        />
+        <input
+          className="rounded border px-2 py-1"
+          value={buildingName}
+          onChange={(event) => setBuildingName(event.target.value)}
+          placeholder="建筑名称"
+        />
+        <button
+          className="rounded bg-zinc-900 px-3 py-2 text-white disabled:opacity-50"
+          disabled={busy || !name.trim()}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              onCreated(
+                await createProject({
+                  name,
+                  building_name: buildingName,
+                  building_id: "B01",
+                }),
+              );
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          创建真实项目
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function UploadPanel({
+  project,
+  onUploaded,
+}: {
+  project: ProjectRecord | null;
+  onUploaded: (project: ProjectRecord) => void;
+}) {
+  const [floorId, setFloorId] = useState("F03");
+  const [floorName, setFloorName] = useState("三层");
+  const [floorIndex, setFloorIndex] = useState(3);
+  const [files, setFiles] = useState<File[]>([]);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <h3 className="font-medium">2. 上传多层蓝图</h3>
+      <p className="mt-1 text-xs text-zinc-500">
+        每次上传会绑定到一个楼层；同一项目可重复上传 F01/F02/F03/RF 等楼层图纸。
+      </p>
+      <div className="mt-2 grid gap-2 text-sm">
+        <div className="grid grid-cols-3 gap-2">
+          <input
+            className="rounded border px-2 py-1"
+            value={floorId}
+            onChange={(event) => setFloorId(event.target.value)}
+            placeholder="floor_id"
+          />
+          <input
+            className="rounded border px-2 py-1"
+            value={floorName}
+            onChange={(event) => setFloorName(event.target.value)}
+            placeholder="楼层名"
+          />
+          <input
+            className="rounded border px-2 py-1"
+            type="number"
+            value={floorIndex}
+            onChange={(event) => setFloorIndex(Number(event.target.value))}
+          />
+        </div>
+        <input
+          className="rounded border px-2 py-1"
+          multiple
+          type="file"
+          accept="image/*,.pdf"
+          onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+        />
+        <button
+          className="rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-50"
+          disabled={!project || !files.length || busy}
+          onClick={async () => {
+            if (!project) return;
+            setBusy(true);
+            try {
+              onUploaded(
+                await uploadBlueprints({
+                  projectId: project.project_id,
+                  files,
+                  buildingId: project.buildings[0]?.building_id ?? "B01",
+                  buildingName: project.buildings[0]?.building_name ?? "主楼",
+                  floorId,
+                  floorName,
+                  floorIndex,
+                  drawingType: "structural_plan",
+                }),
+              );
+              setFiles([]);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          上传到项目
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TracePanel({ events }: { events: RunEvent[] }) {
+  return (
+    <div className="min-h-0 rounded-lg border bg-white p-3">
+      <h3 className="font-medium">Agent 实时公开过程</h3>
+      <p className="mt-1 text-xs text-zinc-500">
+        展示可审计的工具调用、产物和状态，不展示模型私有推理链。
+      </p>
+      <div className="mt-2 max-h-80 space-y-2 overflow-auto pr-1">
+        {events.length === 0 && (
+          <div className="rounded bg-zinc-50 p-3 text-sm text-zinc-500">
+            尚未启动识图任务。
+          </div>
+        )}
+        {events.map((event) => (
+          <div
+            key={`${event.run_id}-${event.seq}`}
+            className="rounded border border-zinc-200 bg-zinc-50 p-2 text-xs"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-zinc-900">
+                #{event.seq} {event.title}
+              </span>
+              <span className="rounded bg-white px-2 py-0.5 text-zinc-500">
+                {event.event_type}
+              </span>
+            </div>
+            {event.summary && (
+              <p className="mt-1 text-zinc-600">{event.summary}</p>
+            )}
+            {!!event.artifact_refs?.length && (
+              <p className="mt-1 text-zinc-500">
+                artifacts: {event.artifact_refs.join(", ")}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SemanticCanvas({
+  objects,
+  selectedId,
+  viewModel,
+  onSelect,
+}: {
+  objects: SemanticViewObject[];
+  selectedId: string | null;
+  viewModel: SemanticViewModel | null;
+  onSelect: (id: string) => void;
+}) {
+  const axisObjects = objects.filter((object) => object.object_type === "axis");
+  const columns = objectsForLayer(viewModel, "COLUMN");
+  const beams = objectsForLayer(viewModel, "MAIN_BEAM");
+  const width = Math.max(
+    Number(viewModel?.coordinate_system?.total_width_mm ?? 50000),
+    1000,
+  );
+  const height = Math.max(
+    Number(viewModel?.coordinate_system?.total_height_mm ?? 42000),
+    1000,
+  );
+  return (
+    <svg
+      className="h-full min-h-[420px] w-full rounded-lg border bg-white"
+      viewBox={viewBoxFor(viewModel)}
+    >
+      <rect
+        x={-2500}
+        y={-2500}
+        width={width + 5000}
+        height={height + 5000}
+        fill="#fafafa"
+      />
+      {axisObjects.map((object) => {
+        if (object.geometry.kind === "vertical_axis") {
+          return (
+            <line
+              key={object.view_id}
+              x1={object.geometry.coord_mm}
+              x2={object.geometry.coord_mm}
+              y1={-1600}
+              y2={height + 1600}
+              stroke="#9ca3af"
+              strokeDasharray="600 250 120 250"
+              strokeWidth={80}
+            />
+          );
+        }
+        if (object.geometry.kind === "horizontal_axis") {
+          return (
+            <line
+              key={object.view_id}
+              x1={-1600}
+              x2={width + 1600}
+              y1={object.geometry.coord_mm}
+              y2={object.geometry.coord_mm}
+              stroke="#9ca3af"
+              strokeDasharray="600 250 120 250"
+              strokeWidth={80}
+            />
+          );
+        }
+        return null;
+      })}
+      {beams.map((object) => {
+        if (object.geometry.kind !== "polyline") return null;
+        const points = object.geometry.points_mm
+          .map((point) => point.join(","))
+          .join(" ");
+        const selected = selectedId === object.semantic_object_id;
+        const mid = object.geometry.points_mm[
+          Math.floor(object.geometry.points_mm.length / 2)
+        ] ??
+          object.geometry.points_mm[0] ?? [0, 0];
+        return (
+          <g
+            key={object.view_id}
+            onClick={() => onSelect(object.semantic_object_id)}
+            className="cursor-pointer"
+          >
+            <polyline
+              points={points}
+              fill="none"
+              stroke={selected ? "#2563eb" : "#111827"}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={selected ? 760 : 520}
+              opacity={0.92}
+            />
+            <text
+              x={mid[0] + 300}
+              y={mid[1] - 450}
+              fontSize={900}
+              fill={selected ? "#2563eb" : "#111827"}
+            >
+              {object.display_label ?? object.semantic_object_id}
+            </text>
+          </g>
+        );
+      })}
+      {columns.map((object) => {
+        if (object.geometry.kind !== "rect_center") return null;
+        const [cx, cy] = object.geometry.center_mm;
+        const [w, h] = object.geometry.size_mm ?? [900, 900];
+        const selected = selectedId === object.semantic_object_id;
+        return (
+          <g
+            key={object.view_id}
+            onClick={() => onSelect(object.semantic_object_id)}
+            className="cursor-pointer"
+          >
+            <rect
+              x={cx - w / 2}
+              y={cy - h / 2}
+              width={w}
+              height={h}
+              fill={selected ? "#dbeafe" : "#e5e7eb"}
+              stroke={selected ? "#2563eb" : "#111827"}
+              strokeWidth={120}
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function OriginalCompare({
+  project,
+  floorId,
+}: {
+  project: ProjectRecord | null;
+  floorId: string | null;
+}) {
+  const floor = allFloors(project).find((item) => item.floor_id === floorId);
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <h3 className="font-medium">原图蓝图对比</h3>
+      <div className="mt-2 grid max-h-80 gap-2 overflow-auto">
+        {!floor?.blueprints.length && (
+          <div className="text-sm text-zinc-500">当前楼层没有上传图纸。</div>
+        )}
+        {floor?.blueprints.map((blueprint) => (
+          <div key={blueprint.blueprint_id} className="rounded border p-2">
+            <div className="mb-1 text-xs font-medium">
+              {blueprint.title} · {blueprint.status}
+            </div>
+            {blueprint.asset_ref.toLowerCase().endsWith(".pdf") ? (
+              <a
+                className="text-xs text-blue-700 underline"
+                href={assetUrl(blueprint.asset_ref)}
+                target="_blank"
+              >
+                打开 PDF
+              </a>
+            ) : (
+              <img
+                className="max-h-56 w-full object-contain"
+                src={assetUrl(blueprint.asset_ref)}
+                alt={blueprint.title}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Inspector({
+  object,
+  projectId,
+  floorId,
+  blueprintId,
+  baseJsonVersion,
+  onCommitted,
+}: {
+  object: SemanticViewObject | null;
+  projectId: string | null;
+  floorId: string | null;
+  blueprintId?: string;
+  baseJsonVersion?: string | null;
+  onCommitted: () => void;
+}) {
+  const [sectionText, setSectionText] = useState("");
+  const [preview, setPreview] = useState<OperationPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setSectionText(formatSection(object?.section));
+    setPreview(null);
+    setError(null);
+  }, [object?.section, object?.semantic_object_id]);
+  if (!object)
+    return (
+      <div className="rounded-lg border bg-white p-3 text-sm text-zinc-500">
+        选择梁或柱后可编辑属性。
+      </div>
+    );
+  const editable =
+    object.object_type === "main_beam" || object.object_type === "column";
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <h3 className="font-medium">对象属性与保存</h3>
+      <div className="mt-2 space-y-2 text-sm">
+        <div>
+          <span className="text-zinc-500">ID：</span>
+          {object.semantic_object_id}
+        </div>
+        <div>
+          <span className="text-zinc-500">类型：</span>
+          {object.object_type}
+        </div>
+        <div>
+          <span className="text-zinc-500">状态：</span>
+          {object.review_status ?? "needs_review"}
+        </div>
+        <div>
+          <span className="text-zinc-500">置信度：</span>
+          {object.confidence ?? "-"}
+        </div>
+        {editable && (
+          <label className="block">
+            <span className="text-zinc-500">截面，例如 600x1200</span>
+            <input
+              className="mt-1 w-full rounded border px-2 py-1"
+              value={sectionText}
+              onChange={(event) => setSectionText(event.target.value)}
+            />
+          </label>
+        )}
+        <div className="flex gap-2">
+          <button
+            className="rounded bg-blue-700 px-3 py-1.5 text-white disabled:opacity-50"
+            disabled={!editable || !projectId || !floorId}
+            onClick={async () => {
+              setError(null);
+              const op = createUpdateOperation({
+                object,
+                sectionText,
+                reviewStatus: "human_confirmed",
+              });
+              if (!op || !projectId || !floorId) {
+                setError("无法生成 Operation，请检查截面格式。列如 600x1200。");
+                return;
+              }
+              try {
+                setPreview(
+                  await previewOperation({
+                    projectId,
+                    floorId,
+                    blueprintId,
+                    baseJsonVersion,
+                    operation: op,
+                  }),
+                );
+              } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          >
+            预览修改
+          </button>
+          <button
+            className="rounded bg-emerald-700 px-3 py-1.5 text-white disabled:opacity-50"
+            disabled={
+              !preview ||
+              preview.validation_result.status === "failed" ||
+              !projectId ||
+              !floorId
+            }
+            onClick={async () => {
+              if (!preview || !projectId || !floorId) return;
+              try {
+                await commitOperation({
+                  projectId,
+                  floorId,
+                  blueprintId,
+                  baseJsonVersion: preview.base_json_version,
+                  previewResultId: preview.preview_result_id,
+                  operation: preview.operation,
+                });
+                setPreview(null);
+                onCommitted();
+              } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          >
+            确认保存
+          </button>
+        </div>
+        {error && (
+          <div className="rounded bg-red-50 p-2 text-xs text-red-700">
+            {error}
+          </div>
+        )}
+        {preview && (
+          <div>
+            <div className="mb-1 text-xs font-medium">
+              Patch 预览 · {preview.validation_result.status}
+            </div>
+            <JsonBlock
+              value={{
+                json_patch: preview.json_patch,
+                validation_result: preview.validation_result,
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function ReadAgentWorkbench() {
-  const [state, setState] = useState(createInitialReadAgentState);
-  const [mode, setMode] = useState<"processing" | "edit">("processing");
-  const [traceCount, setTraceCount] = useState(state.publicTraceEvents.length);
-  const [isReplaying, setIsReplaying] = useState(false);
-  const [selectedObjectId, setSelectedObjectId] = useState("beam-B3");
-  const [jsonTab, setJsonTab] = useState<"stage" | "view" | "patch" | "audit">(
-    "stage",
-  );
-  const [draft, setDraft] = useState({
-    label: "KL3(2)",
-    section: "300x650",
-    reviewStatus: "needs_review" as ReviewStatus,
-  });
-
-  const selectionObjects = useMemo(
-    () =>
-      objectsOnSelection(
-        state.objects,
-        state.selectedFloorId,
-        state.selectedBlueprintId,
-      ),
-    [state.objects, state.selectedBlueprintId, state.selectedFloorId],
-  );
-  const selectedObject = state.objects[selectedObjectId] ?? selectionObjects[0];
-  const selectedBeam = selectedObject?.type === "beam" ? selectedObject : null;
-  const schematicNotice = getSchematic3dNotice(
-    state.project,
-    state.selectedFloorId,
-  );
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [project, setProject] = useState<ProjectRecord | null>(null);
+  const [selectedFloorId, setSelectedFloorId] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("processing");
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  const [viewModel, setViewModel] = useState<SemanticViewModel | null>(null);
+  const [semanticJson, setSemanticJson] = useState<unknown>(null);
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!selectionObjects.some((object) => object.id === selectedObjectId)) {
-      setSelectedObjectId(selectionObjects[0]?.id ?? "beam-B3");
-    }
-  }, [selectedObjectId, selectionObjects]);
+    listProjects()
+      .then(setProjects)
+      .catch((err) => setError(err.message));
+  }, []);
 
-  useEffect(() => {
-    if (selectedBeam) {
-      setDraft({
-        label: selectedBeam.label,
-        section: selectedBeam.section,
-        reviewStatus: selectedBeam.reviewStatus,
-      });
-    }
-  }, [selectedBeam]);
+  const floors = allFloors(project);
+  const selectedObject = findObject(viewModel, selectedObjectId);
+  const firstBlueprintId = floors.find(
+    (floor) => floor.floor_id === selectedFloorId,
+  )?.blueprints[0]?.blueprint_id;
 
-  useEffect(() => {
-    if (!isReplaying) return;
-    if (traceCount >= state.publicTraceEvents.length) {
-      setIsReplaying(false);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setTraceCount((count) =>
-        Math.min(count + 1, state.publicTraceEvents.length),
+  async function reloadProject(
+    projectId = project?.project_id,
+    floorId = selectedFloorId,
+  ) {
+    if (!projectId) return;
+    const loaded = await getProject(projectId);
+    setProject(loaded);
+    const nextFloorId = floorId ?? allFloors(loaded)[0]?.floor_id ?? null;
+    setSelectedFloorId(nextFloorId);
+    if (nextFloorId) {
+      const vm = await getViewModel(projectId, nextFloorId);
+      setViewModel(vm);
+      setSelectedObjectId(
+        vm.objects.find((object) => object.object_type === "main_beam")
+          ?.semantic_object_id ??
+          vm.objects[0]?.semantic_object_id ??
+          null,
       );
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [isReplaying, state.publicTraceEvents.length, traceCount]);
-
-  const preview = useMemo(() => {
-    if (!selectedBeam) return null;
-    return createOperationPreview(state, {
-      objectId: selectedBeam.id,
-      updates: draft,
-      actor: "web-ui-user",
-    });
-  }, [draft, selectedBeam, state]);
-
-  const visibleTrace = state.publicTraceEvents.slice(0, traceCount);
-  const floorBlueprintIds = getBlueprintsForFloor(
-    state.project,
-    state.selectedFloorId,
-  );
-
-  function handleFloorChange(floorId: string) {
-    setState((current) => selectFloor(current, floorId));
-    setJsonTab("view");
+      try {
+        setSemanticJson(await getSemanticJson(projectId, nextFloorId));
+      } catch {
+        setSemanticJson(null);
+      }
+    }
   }
 
-  function handleBlueprintChange(blueprintId: string) {
-    setState((current) => selectBlueprint(current, blueprintId));
-    setJsonTab("view");
+  async function startRun() {
+    if (!project) return;
+    setBusy(true);
+    setError(null);
+    setEvents([]);
+    setMode("processing");
+    try {
+      const run = await createRun({
+        projectId: project.project_id,
+        floorIds: selectedFloorId ? [selectedFloorId] : undefined,
+      });
+      const source = openRunEventSource(run.run_id);
+      const handle = async (message: MessageEvent<string>) => {
+        const event = parseRunEvent(message);
+        if (!event) return;
+        setEvents((old) => [...old, event]);
+        if (event.event_type === "ready_for_edit") {
+          source.close();
+          await reloadProject(project.project_id, selectedFloorId);
+          setMode("edit");
+          setBusy(false);
+        }
+        if (
+          event.event_type === "run.failed" ||
+          event.event_type === "stream.closed"
+        ) {
+          source.close();
+          setBusy(false);
+        }
+      };
+      source.onmessage = handle;
+      for (const type of SSE_EVENT_TYPES)
+        source.addEventListener(type, handle as unknown as EventListener);
+      source.onerror = () => {
+        source.close();
+        setBusy(false);
+        setError("事件流连接中断，请检查后端日志或刷新运行状态。");
+      };
+    } catch (err) {
+      setBusy(false);
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
-  function handleCommit() {
-    if (!preview) return;
-    setState((current) => commitOperationPreview(current, preview));
-    setJsonTab("audit");
-    setMode("edit");
-  }
-
-  function handleOcr() {
-    if (!selectedObject?.evidenceRef) return;
-    const candidate = requestOcrCandidate(
-      selectedObject.id,
-      selectedObject.evidenceRef.bbox,
-    );
-    setState((current) => ({
-      ...current,
-      ocrCandidates: [candidate, ...current.ocrCandidates],
-    }));
-  }
+  const semanticObjects = viewModel?.objects ?? [];
 
   return (
-    <main className="min-h-screen bg-zinc-50 text-zinc-950" data-testid="read-agent-workbench">
-      <header className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
-        <div className="flex flex-col gap-3 px-4 py-3 lg:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-lg font-semibold tracking-normal">
-                Read Agent WebUI
-              </h1>
-              <div className="text-sm text-zinc-600">
-                {state.project.name} · {state.project.discipline} ·{" "}
-                {state.project.buildingName}
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">
-                {state.editBaseVersion}
-              </span>
-              <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">
-                {state.stageJson.stage}
-              </span>
-              {schematicNotice && (
-                <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
-                  <AlertTriangle className="size-4" />
-                  {schematicNotice}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              aria-label="floor_id"
-              className="h-9 rounded-md border border-zinc-300 bg-white px-3 text-sm"
-              value={state.selectedFloorId}
-              onChange={(event) => handleFloorChange(event.target.value)}
-            >
-              {state.project.floors.map((floor) => (
-                <option key={floor.id} value={floor.id}>
-                  {floor.id} · {floor.name}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="blueprint_id"
-              className="h-9 rounded-md border border-zinc-300 bg-white px-3 text-sm"
-              value={state.selectedBlueprintId}
-              onChange={(event) => handleBlueprintChange(event.target.value)}
-            >
-              {floorBlueprintIds.map((blueprintId) => (
-                <option key={blueprintId} value={blueprintId}>
-                  {blueprintId}
-                </option>
-              ))}
-            </select>
-            <div className="inline-flex h-9 overflow-hidden rounded-md border border-zinc-300 bg-white">
-              <button
-                className={cx(
-                  "inline-flex items-center gap-2 px-3 text-sm",
-                  mode === "processing" && "bg-zinc-900 text-white",
-                )}
-                onClick={() => setMode("processing")}
-                type="button"
-              >
-                <Activity className="size-4" />
-                Processing
-              </button>
-              <button
-                className={cx(
-                  "inline-flex items-center gap-2 px-3 text-sm",
-                  mode === "edit" && "bg-zinc-900 text-white",
-                )}
-                disabled={!state.baseVersionLocked}
-                onClick={() => setMode("edit")}
-                type="button"
-              >
-                <Pencil className="size-4" />
-                Edit
-              </button>
-            </div>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-sm hover:bg-zinc-100"
-              onClick={() => {
-                setTraceCount(1);
-                setIsReplaying(true);
-                setMode("processing");
-              }}
-              type="button"
-            >
-              <Wifi className="size-4" />
-              Replay SSE
-            </button>
-          </div>
+    <div className="flex h-full min-h-[calc(100vh-1rem)] flex-col bg-zinc-100 p-3 text-zinc-900">
+      <header className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3">
+        <div>
+          <h1 className="text-lg font-semibold">
+            CV-NotFunning 结构图纸读图 Agent
+          </h1>
+          <p className="text-xs text-zinc-500">
+            真实闭环：上传多层蓝图 → Agent 识图 → 实时可视化 → 语义编辑 → JSON
+            持久化。
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <span
+            className={classNames(
+              "rounded px-2 py-1",
+              mode === "processing"
+                ? "bg-amber-100 text-amber-800"
+                : "bg-emerald-100 text-emerald-800",
+            )}
+          >
+            {mode === "processing" ? "Processing Mode" : "Edit Mode"}
+          </span>
+          <button
+            className="rounded border px-3 py-1.5"
+            onClick={() => void listProjects().then(setProjects)}
+          >
+            刷新项目
+          </button>
         </div>
       </header>
+      {error && (
+        <div className="mb-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+      <main className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[360px_minmax(0,1fr)_360px]">
+        <aside className="min-h-0 space-y-3 overflow-auto">
+          <ProjectCreator
+            onCreated={(created) => {
+              setProject(created);
+              setProjects((old) => [
+                projectToSummary(created),
+                ...old.filter((item) => item.project_id !== created.project_id),
+              ]);
+              setSelectedFloorId(null);
+              setViewModel(null);
+            }}
+          />
+          <div className="rounded-lg border bg-white p-3">
+            <h3 className="font-medium">选择已有项目</h3>
+            <select
+              className="mt-2 w-full rounded border px-2 py-1 text-sm"
+              value={project?.project_id ?? ""}
+              onChange={async (event) => {
+                if (!event.target.value) return;
+                await reloadProject(event.target.value, null);
+              }}
+            >
+              <option value="">请选择</option>
+              {projects.map((item) => (
+                <option key={item.project_id} value={item.project_id}>
+                  {item.name} · {item.project_id}
+                </option>
+              ))}
+            </select>
+          </div>
+          <UploadPanel
+            project={project}
+            onUploaded={(updated) => {
+              setProject(updated);
+              setSelectedFloorId(allFloors(updated).at(-1)?.floor_id ?? null);
+            }}
+          />
+          <div className="rounded-lg border bg-white p-3">
+            <h3 className="font-medium">3. 楼层与识图</h3>
+            <select
+              className="mt-2 w-full rounded border px-2 py-1 text-sm"
+              value={selectedFloorId ?? ""}
+              onChange={async (event) => {
+                setSelectedFloorId(event.target.value);
+                if (project)
+                  await reloadProject(project.project_id, event.target.value);
+              }}
+            >
+              <option value="">选择楼层</option>
+              {floors.map((floor) => (
+                <option key={floor.floor_id} value={floor.floor_id}>
+                  {floor.floor_name} · {floor.floor_id} ·{" "}
+                  {floor.blueprints.length} 张图
+                </option>
+              ))}
+            </select>
+            <button
+              className="mt-2 w-full rounded bg-indigo-700 px-3 py-2 text-white disabled:opacity-50"
+              disabled={!project || !selectedFloorId || busy}
+              onClick={() => void startRun()}
+            >
+              启动真实 Agent 识图
+            </button>
+          </div>
+          <TracePanel events={events} />
+        </aside>
 
-      <section className="grid gap-4 px-4 py-4 lg:grid-cols-[300px_minmax(0,1fr)_340px] lg:px-6">
-        <AgentPanel events={visibleTrace} traceCount={traceCount} />
-
-        <section className="min-w-0 space-y-4">
-          <div className="rounded-lg border border-zinc-200 bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
-              <div className="inline-flex items-center gap-2 text-sm font-medium">
-                <Layers className="size-4 text-blue-600" />
-                Semantic Canvas 2D
+        <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_240px] gap-3">
+          <div className="rounded-lg border bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-medium">语义结构图</h2>
+                <p className="text-xs text-zinc-500">
+                  对象数：{semanticObjects.length}
+                  ；编辑对象是梁/柱/轴网等语义对象，不是 CAD 自由点线。
+                </p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {selectionObjects.map((object) => (
+              <div className="flex gap-2 text-xs">
+                <button
+                  className="rounded border px-2 py-1"
+                  onClick={() => setMode("processing")}
+                >
+                  查看处理过程
+                </button>
+                <button
+                  className="rounded border px-2 py-1"
+                  onClick={() => setMode("edit")}
+                  disabled={!viewModel?.objects.length}
+                >
+                  进入编辑模式
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="min-h-0">
+            <SemanticCanvas
+              objects={semanticObjects}
+              selectedId={selectedObjectId}
+              viewModel={viewModel}
+              onSelect={setSelectedObjectId}
+            />
+          </div>
+          <div className="grid min-h-0 gap-3 md:grid-cols-2">
+            <div className="min-h-0 rounded-lg border bg-white p-3">
+              <h3 className="font-medium">对象列表</h3>
+              <div className="mt-2 max-h-44 overflow-auto text-xs">
+                {semanticObjects.map((object) => (
                   <button
-                    className={cx(
-                      "rounded-md border px-2 py-1 text-xs",
-                      object.id === selectedObject?.id
-                        ? "border-zinc-900 bg-zinc-900 text-white"
-                        : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100",
+                    key={object.semantic_object_id}
+                    className={classNames(
+                      "mb-1 block w-full rounded border px-2 py-1 text-left",
+                      selectedObjectId === object.semantic_object_id &&
+                        "border-blue-500 bg-blue-50",
                     )}
-                    key={object.id}
-                    onClick={() => setSelectedObjectId(object.id)}
-                    type="button"
+                    onClick={() =>
+                      setSelectedObjectId(object.semantic_object_id)
+                    }
                   >
-                    {object.label}
+                    {object.object_type} ·{" "}
+                    {object.display_label ?? object.semantic_object_id}
                   </button>
                 ))}
               </div>
             </div>
-            <SemanticCanvas2D
-              objects={selectionObjects}
-              selectedObjectId={selectedObject?.id}
-              onSelect={setSelectedObjectId}
-            />
-          </div>
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            <ThreeDPreviewPanel
-              objects={Object.values(state.objects)}
-              project={state.project}
-              selectedFloorId={state.selectedFloorId}
-            />
-            <JsonLivePanel
-              activeTab={jsonTab}
-              onTabChange={setJsonTab}
-              patch={preview?.jsonPatch ?? []}
-              state={state}
-            />
+            <div className="min-h-0 rounded-lg border bg-white p-3">
+              <h3 className="font-medium">JSON 实时状态</h3>
+              <JsonBlock
+                value={{
+                  view_quality: viewModel?.quality,
+                  base_json_version: viewModel?.base_json_version,
+                  selected: selectedObject,
+                }}
+              />
+            </div>
           </div>
         </section>
 
-        <InspectorPanel
-          draft={draft}
-          mode={mode}
-          onCommit={handleCommit}
-          onDraftChange={setDraft}
-          onOcr={handleOcr}
-          onRedo={() => setState((current) => redoNextOperation(current))}
-          onUndo={() => setState((current) => undoLastCommittedOperation(current))}
-          preview={preview}
-          selectedObject={selectedObject}
-          undoDisabled={state.undoStack.length === 0}
-          redoDisabled={state.redoStack.length === 0}
-        />
-      </section>
-
-      <section className="grid gap-4 px-4 pb-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-6">
-        <AuditPanel state={state} />
-        <ContractPanel />
-      </section>
-    </main>
-  );
-}
-
-function AgentPanel({
-  events,
-  traceCount,
-}: {
-  events: ReturnType<typeof createInitialReadAgentState>["publicTraceEvents"];
-  traceCount: number;
-}) {
-  return (
-    <aside className="rounded-lg border border-zinc-200 bg-white">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <div className="inline-flex items-center gap-2 text-sm font-medium">
-          <Activity className="size-4 text-emerald-600" />
-          Public Agent Trace
-        </div>
-        <span className="text-xs text-zinc-500">{traceCount}/8</span>
-      </div>
-      <div className="max-h-[690px] space-y-3 overflow-auto p-3">
-        {events.map((event) => (
-          <article className="rounded-md border border-zinc-200 p-3" key={event.seq}>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="rounded-md bg-zinc-100 px-2 py-1 text-xs text-zinc-700">
-                {event.sseType}
-              </span>
-              <span className="text-xs text-zinc-500">{event.stage}</span>
-            </div>
-            <h2 className="text-sm font-medium">{event.title}</h2>
-            <p className="mt-1 text-sm text-zinc-600">{event.summary}</p>
-            <p className="mt-2 border-l-2 border-blue-200 pl-2 text-xs text-zinc-500">
-              {event.publicRationale}
+        <aside className="min-h-0 space-y-3 overflow-auto">
+          <OriginalCompare project={project} floorId={selectedFloorId} />
+          <Inspector
+            object={selectedObject}
+            projectId={project?.project_id ?? null}
+            floorId={selectedFloorId}
+            blueprintId={firstBlueprintId}
+            baseJsonVersion={viewModel?.base_json_version}
+            onCommitted={() =>
+              void reloadProject(project?.project_id, selectedFloorId)
+            }
+          />
+          <div className="rounded-lg border bg-white p-3">
+            <h3 className="font-medium">楼层 3D 预览入口</h3>
+            <p className="mt-1 text-xs text-zinc-500">
+              当前补丁只打通 2D 语义编辑闭环；3D 只读预览应从 floor-level
+              semantic JSON 派生，禁止反向编辑。
             </p>
-          </article>
-        ))}
-      </div>
-    </aside>
-  );
-}
-
-function SemanticCanvas2D({
-  objects,
-  onSelect,
-  selectedObjectId,
-}: {
-  objects: SemanticObject[];
-  onSelect: (id: string) => void;
-  selectedObjectId?: string;
-}) {
-  const extentX = 49200;
-  const extentY = 41700;
-  const toX = (x: number) => x;
-  const toY = (y: number) => extentY - y;
-
-  return (
-    <div className="relative aspect-[16/10] min-h-[360px] overflow-hidden bg-zinc-100">
-      <svg
-        aria-label="semantic structure canvas"
-        className="h-full w-full"
-        viewBox={`-1800 -1800 ${extentX + 3600} ${extentY + 3600}`}
-      >
-        <defs>
-          <pattern id="minor-grid" width="2400" height="2400" patternUnits="userSpaceOnUse">
-            <path d="M 2400 0 L 0 0 0 2400" fill="none" stroke="#e4e4e7" strokeWidth="80" />
-          </pattern>
-        </defs>
-        <rect
-          fill="url(#minor-grid)"
-          height={extentY}
-          opacity="0.95"
-          width={extentX}
-          x="0"
-          y="0"
-        />
-        <rect
-          fill="#eff6ff"
-          height={extentY}
-          opacity="0.55"
-          stroke="#bfdbfe"
-          strokeWidth="120"
-          width={extentX}
-          x="0"
-          y="0"
-        />
-        {[0, 7200, 16200, 25200, 32400, 39600, 49200].map((x, index) => (
-          <g key={`x-${x}`}>
-            <line
-              stroke="#71717a"
-              strokeDasharray="480 360"
-              strokeWidth="90"
-              x1={toX(x)}
-              x2={toX(x)}
-              y1={toY(0)}
-              y2={toY(extentY)}
-            />
-            <circle cx={toX(x)} cy={toY(extentY) - 900} fill="#fff" r="620" stroke="#52525b" strokeWidth="90" />
-            <text dominantBaseline="middle" fill="#18181b" fontSize="760" textAnchor="middle" x={toX(x)} y={toY(extentY) - 900}>
-              {index + 1}
-            </text>
-          </g>
-        ))}
-        {[0, 9600, 19200, 22500, 32100, 41700].map((y, index) => (
-          <g key={`y-${y}`}>
-            <line
-              stroke="#71717a"
-              strokeDasharray="480 360"
-              strokeWidth="90"
-              x1={toX(0)}
-              x2={toX(extentX)}
-              y1={toY(y)}
-              y2={toY(y)}
-            />
-            <circle cx={toX(0) + 900} cy={toY(y)} fill="#fff" r="620" stroke="#52525b" strokeWidth="90" />
-            <text dominantBaseline="middle" fill="#18181b" fontSize="760" textAnchor="middle" x={toX(0) + 900} y={toY(y)}>
-              {"ABCDEF"[index]}
-            </text>
-          </g>
-        ))}
-        {objects.map((object) => (
-          <SemanticObjectShape
-            key={object.id}
-            object={object}
-            onSelect={onSelect}
-            selected={object.id === selectedObjectId}
-            toX={toX}
-            toY={toY}
-          />
-        ))}
-      </svg>
+          </div>
+          <details className="rounded-lg border bg-white p-3">
+            <summary className="cursor-pointer font-medium">
+              Semantic JSON
+            </summary>
+            <div className="mt-2">
+              <JsonBlock
+                value={semanticJson ?? { message: "识图完成后加载" }}
+              />
+            </div>
+          </details>
+        </aside>
+      </main>
     </div>
   );
 }
 
-function SemanticObjectShape({
-  object,
-  onSelect,
-  selected,
-  toX,
-  toY,
-}: {
-  object: SemanticObject;
-  onSelect: (id: string) => void;
-  selected: boolean;
-  toX: (value: number) => number;
-  toY: (value: number) => number;
-}) {
-  const stroke = selected ? "#dc2626" : object.type === "beam" ? "#2563eb" : "#111827";
-  const strokeWidth = selected ? 420 : 260;
-
-  if (object.type === "beam") {
-    const [[x1, y1], [x2, y2]] = object.lineMm;
-    return (
-      <g className="cursor-pointer" onClick={() => onSelect(object.id)}>
-        <line
-          stroke={stroke}
-          strokeLinecap="round"
-          strokeWidth={strokeWidth}
-          x1={toX(x1)}
-          x2={toX(x2)}
-          y1={toY(y1)}
-          y2={toY(y2)}
-        />
-        {object.evidenceRef && (
-          <rect
-            fill="#fef3c7"
-            height={object.evidenceRef.bbox.height}
-            opacity="0.55"
-            stroke="#d97706"
-            strokeDasharray="180 160"
-            strokeWidth="90"
-            width={object.evidenceRef.bbox.width}
-            x={object.evidenceRef.bbox.x}
-            y={toY(object.evidenceRef.bbox.y) - object.evidenceRef.bbox.height}
-          />
-        )}
-        <text
-          fill="#1e3a8a"
-          fontSize="920"
-          fontWeight="700"
-          textAnchor="middle"
-          x={(toX(x1) + toX(x2)) / 2}
-          y={toY(y1) - 650}
-        >
-          {object.label}
-        </text>
-      </g>
-    );
-  }
-
-  if (object.type === "column") {
-    return (
-      <rect
-        className="cursor-pointer"
-        fill={selected ? "#fecaca" : "#e5e7eb"}
-        height="980"
-        onClick={() => onSelect(object.id)}
-        stroke={stroke}
-        strokeWidth="160"
-        width="980"
-        x={toX(object.coordMm[0]) - 490}
-        y={toY(object.coordMm[1]) - 490}
-      />
-    );
-  }
-
-  if (object.type === "label") {
-    return (
-      <text
-        className="cursor-pointer"
-        fill={selected ? "#dc2626" : "#52525b"}
-        fontSize="720"
-        onClick={() => onSelect(object.id)}
-        x={toX(object.coordMm[0])}
-        y={toY(object.coordMm[1])}
-      >
-        {object.text}
-      </text>
-    );
-  }
-
-  return null;
-}
-
-function ThreeDPreviewPanel({
-  objects,
-  project,
-  selectedFloorId,
-}: {
-  objects: SemanticObject[];
-  project: ReturnType<typeof createInitialReadAgentState>["project"];
-  selectedFloorId: string;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const notice = getSchematic3dNotice(project, selectedFloorId);
-
-  useEffect(() => {
-    let disposed = false;
-    let animationFrame = 0;
-    let renderer: WebGLRenderer | null = null;
-
-    void import("three").then((THREE) => {
-      if (disposed || !canvasRef.current) return;
-      const canvas = canvasRef.current;
-      const scene = new THREE.Scene();
-      const group = new THREE.Group();
-      scene.add(group);
-
-      const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
-      camera.position.set(19, 15, 24);
-      camera.lookAt(0, 2, 0);
-
-      renderer = new THREE.WebGLRenderer({
-        alpha: true,
-        antialias: true,
-        canvas,
-        preserveDrawingBuffer: true,
-      });
-      renderer.setClearColor(0xffffff, 0);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-      scene.add(new THREE.HemisphereLight(0xffffff, 0xbfd7ff, 2.2));
-      const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
-      keyLight.position.set(12, 18, 8);
-      scene.add(keyLight);
-
-      const floorMaterial = new THREE.MeshStandardMaterial({
-        color: 0xdbeafe,
-        metalness: 0,
-        opacity: 0.58,
-        roughness: 0.9,
-        transparent: true,
-      });
-      const beamMaterial = new THREE.MeshStandardMaterial({
-        color: 0x2563eb,
-        roughness: 0.55,
-      });
-      const columnMaterial = new THREE.MeshStandardMaterial({
-        color: 0x64748b,
-        roughness: 0.65,
-      });
-      const selectedMaterial = new THREE.MeshStandardMaterial({
-        color: 0xdc2626,
-        roughness: 0.5,
-      });
-
-      const scale = 0.00038;
-      const extentX = 49200;
-      const extentY = 41700;
-      for (const [index, floor] of project.floors.entries()) {
-        const y = floor.elevationM === null ? index * 1.6 : floor.elevationM * 0.42;
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(18.7, 0.08, 15.8), floorMaterial);
-        slab.position.set(0, y, 0);
-        group.add(slab);
-      }
-
-      for (const object of objects) {
-        const floorIndex = Math.max(
-          0,
-          project.floors.findIndex((floor) => floor.id === object.floorId),
-        );
-        const floor = project.floors[floorIndex];
-        const baseY =
-          floor?.elevationM === null || floor?.elevationM === undefined
-            ? floorIndex * 1.6
-            : floor.elevationM * 0.42;
-
-        if (object.type === "beam") {
-          const [[x1, y1], [x2, y2]] = object.lineMm;
-          const length = Math.hypot(x2 - x1, y2 - y1) * scale;
-          const beam = new THREE.Mesh(
-            new THREE.BoxGeometry(length, 0.18, 0.24),
-            object.floorId === selectedFloorId ? beamMaterial : selectedMaterial,
-          );
-          beam.position.set(
-            ((x1 + x2) / 2 - extentX / 2) * scale,
-            baseY + 0.35,
-            ((y1 + y2) / 2 - extentY / 2) * scale,
-          );
-          beam.rotation.y = -Math.atan2(y2 - y1, x2 - x1);
-          group.add(beam);
-        }
-
-        if (object.type === "column") {
-          const column = new THREE.Mesh(
-            new THREE.BoxGeometry(0.28, 1.2, 0.28),
-            columnMaterial,
-          );
-          column.position.set(
-            (object.coordMm[0] - extentX / 2) * scale,
-            baseY + 0.65,
-            (object.coordMm[1] - extentY / 2) * scale,
-          );
-          group.add(column);
-        }
-      }
-
-      function resize() {
-        if (!canvas.parentElement || !renderer) return;
-        const width = Math.max(320, canvas.parentElement.clientWidth);
-        const height = Math.max(260, canvas.parentElement.clientHeight);
-        renderer.setSize(width, height, false);
-        camera.aspect = width / height;
-        camera.updateProjectionMatrix();
-      }
-
-      function animate() {
-        if (!renderer) return;
-        group.rotation.y = -0.42 + Math.sin(Date.now() / 2400) * 0.04;
-        resize();
-        renderer.render(scene, camera);
-        animationFrame = window.requestAnimationFrame(animate);
-      }
-
-      resize();
-      animate();
-    });
-
-    return () => {
-      disposed = true;
-      window.cancelAnimationFrame(animationFrame);
-      renderer?.dispose();
-    };
-  }, [objects, project, selectedFloorId]);
-
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <div className="inline-flex items-center gap-2 text-sm font-medium">
-          <Box className="size-4 text-violet-600" />
-          ThreeDPreviewPanel
-        </div>
-        {notice && (
-          <span className="inline-flex items-center gap-1 text-xs text-amber-700">
-            <AlertTriangle className="size-3.5" />
-            {notice}
-          </span>
-        )}
-      </div>
-      <div className="h-[300px] bg-gradient-to-b from-zinc-50 to-white">
-        <canvas ref={canvasRef} className="h-full w-full" data-testid="read-agent-3d-canvas" />
-      </div>
-    </section>
-  );
-}
-
-function JsonLivePanel({
-  activeTab,
-  onTabChange,
-  patch,
-  state,
-}: {
-  activeTab: "stage" | "view" | "patch" | "audit";
-  onTabChange: (tab: "stage" | "view" | "patch" | "audit") => void;
-  patch: unknown;
-  state: ReturnType<typeof createInitialReadAgentState>;
-}) {
-  const payload =
-    activeTab === "stage"
-      ? state.stageJson
-      : activeTab === "view"
-        ? state.viewModelJson
-        : activeTab === "patch"
-          ? patch
-          : state.auditLog;
-
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <div className="inline-flex items-center gap-2 text-sm font-medium">
-          <FileJson className="size-4 text-blue-600" />
-          JSON / Diff / Audit
-        </div>
-        <div className="inline-flex overflow-hidden rounded-md border border-zinc-300">
-          {(["stage", "view", "patch", "audit"] as const).map((tab) => (
-            <button
-              className={cx(
-                "px-2 py-1 text-xs",
-                activeTab === tab ? "bg-zinc-900 text-white" : "bg-white text-zinc-700",
-              )}
-              key={tab}
-              onClick={() => onTabChange(tab)}
-              type="button"
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
-      <pre className="h-[300px] overflow-auto p-3 text-xs leading-relaxed text-zinc-700">
-        {formatJson(payload)}
-      </pre>
-    </section>
-  );
-}
-
-function InspectorPanel({
-  draft,
-  mode,
-  onCommit,
-  onDraftChange,
-  onOcr,
-  onRedo,
-  onUndo,
-  preview,
-  redoDisabled,
-  selectedObject,
-  undoDisabled,
-}: {
-  draft: {
-    label: string;
-    section: string;
-    reviewStatus: ReviewStatus;
-  };
-  mode: "processing" | "edit";
-  onCommit: () => void;
-  onDraftChange: (draft: {
-    label: string;
-    section: string;
-    reviewStatus: ReviewStatus;
-  }) => void;
-  onOcr: () => void;
-  onRedo: () => void;
-  onUndo: () => void;
-  preview: ReturnType<typeof createOperationPreview> | null;
-  redoDisabled: boolean;
-  selectedObject?: SemanticObject;
-  undoDisabled: boolean;
-}) {
-  const lowConfidence =
-    selectedObject?.confidence !== undefined && selectedObject.confidence < 0.9;
-
-  return (
-    <aside className="space-y-4">
-      <section className="rounded-lg border border-zinc-200 bg-white">
-        <div className="flex items-center justify-between border-b px-3 py-2">
-          <div className="inline-flex items-center gap-2 text-sm font-medium">
-            <Pencil className="size-4 text-blue-600" />
-            InspectorEvidencePanel
-          </div>
-          <span className="text-xs text-zinc-500">{mode}</span>
-        </div>
-        <div className="space-y-3 p-3">
-          {selectedObject ? (
-            <>
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="font-medium">{selectedObject.label}</div>
-                  <div className="text-xs text-zinc-500">{selectedObject.id}</div>
-                </div>
-                <span
-                  className={cx(
-                    "rounded-md border px-2 py-1 text-xs",
-                    statusClass(selectedObject.reviewStatus),
-                  )}
-                >
-                  {selectedObject.reviewStatus}
-                </span>
-              </div>
-
-              {lowConfidence && (
-                <div className="inline-flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">
-                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                  confidence {selectedObject.confidence.toFixed(2)}
-                </div>
-              )}
-
-              {selectedObject.type === "beam" && (
-                <BeamForm draft={draft} onDraftChange={onDraftChange} />
-              )}
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white text-sm hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={undoDisabled}
-                  onClick={onUndo}
-                  type="button"
-                >
-                  <Undo2 className="size-4" />
-                  Undo
-                </button>
-                <button
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white text-sm hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={redoDisabled}
-                  onClick={onRedo}
-                  type="button"
-                >
-                  <Redo2 className="size-4" />
-                  Redo
-                </button>
-              </div>
-
-              <button
-                className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 text-sm text-blue-700 hover:bg-blue-100"
-                disabled={!selectedObject.evidenceRef}
-                onClick={onOcr}
-                type="button"
-              >
-                <Search className="size-4" />
-                OCR region
-              </button>
-            </>
-          ) : (
-            <div className="text-sm text-zinc-500">No object selected</div>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-zinc-200 bg-white">
-        <div className="flex items-center justify-between border-b px-3 py-2">
-          <div className="inline-flex items-center gap-2 text-sm font-medium">
-            <GitBranch className="size-4 text-emerald-600" />
-            Operation Preview
-          </div>
-          {preview?.validation.ok ? (
-            <CheckCircle2 className="size-4 text-emerald-600" />
-          ) : (
-            <AlertTriangle className="size-4 text-amber-600" />
-          )}
-        </div>
-        <div className="space-y-3 p-3">
-          <pre className="max-h-[220px] overflow-auto rounded-md bg-zinc-950 p-3 text-xs text-zinc-100">
-            {formatJson({
-              operation: preview?.operation,
-              json_patch: preview?.jsonPatch,
-              validation: preview?.validation,
-              audit_event: preview?.auditEvent
-                ? {
-                    actor: preview.auditEvent.actor,
-                    objectId: preview.auditEvent.objectId,
-                    patch: preview.auditEvent.patch,
-                  }
-                : null,
-            })}
-          </pre>
-          {preview && !preview.validation.ok && (
-            <ul className="space-y-1 text-sm text-red-700">
-              {preview.validation.issues.map((issue) => (
-                <li key={issue}>{issue}</li>
-              ))}
-            </ul>
-          )}
-          <button
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md bg-zinc-900 px-3 text-sm text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
-            disabled={!preview?.validation.ok}
-            onClick={onCommit}
-            type="button"
-          >
-            <CheckCircle2 className="size-4" />
-            Commit
-          </button>
-        </div>
-      </section>
-    </aside>
-  );
-}
-
-function BeamForm({
-  draft,
-  onDraftChange,
-}: {
-  draft: {
-    label: string;
-    section: string;
-    reviewStatus: ReviewStatus;
-  };
-  onDraftChange: (draft: {
-    label: string;
-    section: string;
-    reviewStatus: ReviewStatus;
-  }) => void;
-}) {
-  return (
-    <div className="grid gap-3">
-      <label className="grid gap-1 text-sm">
-        <span className="text-zinc-600">梁号</span>
-        <input
-          className="h-9 rounded-md border border-zinc-300 px-3"
-          value={draft.label}
-          onChange={(event) =>
-            onDraftChange({ ...draft, label: event.target.value })
-          }
-        />
-      </label>
-      <label className="grid gap-1 text-sm">
-        <span className="text-zinc-600">截面</span>
-        <input
-          className="h-9 rounded-md border border-zinc-300 px-3"
-          value={draft.section}
-          onChange={(event) =>
-            onDraftChange({ ...draft, section: event.target.value })
-          }
-        />
-      </label>
-      <label className="grid gap-1 text-sm">
-        <span className="text-zinc-600">review_status</span>
-        <select
-          className="h-9 rounded-md border border-zinc-300 bg-white px-3"
-          value={draft.reviewStatus}
-          onChange={(event) =>
-            onDraftChange({
-              ...draft,
-              reviewStatus: event.target.value as ReviewStatus,
-            })
-          }
-        >
-          <option value="candidate">candidate</option>
-          <option value="needs_review">needs_review</option>
-          <option value="accepted">accepted</option>
-          <option value="rejected">rejected</option>
-        </select>
-      </label>
-    </div>
-  );
-}
-
-function AuditPanel({
-  state,
-}: {
-  state: ReturnType<typeof createInitialReadAgentState>;
-}) {
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <div className="inline-flex items-center gap-2 text-sm font-medium">
-          <GitBranch className="size-4 text-emerald-600" />
-          BottomAuditPanel
-        </div>
-        <span className="text-xs text-zinc-500">{state.auditLog.length} events</span>
-      </div>
-      <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
-        {state.auditLog.length === 0 ? (
-          <div className="text-sm text-zinc-500">No committed operations</div>
-        ) : (
-          state.auditLog.map((event) => (
-            <article className="rounded-md border border-zinc-200 p-3" key={event.id}>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="font-medium">{event.objectId}</span>
-                <span className="text-xs text-zinc-500">{event.actor}</span>
-              </div>
-              <div className="text-xs text-zinc-500">{event.ts}</div>
-              <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-zinc-100 p-2 text-xs">
-                {formatJson(event.patch)}
-              </pre>
-            </article>
-          ))
-        )}
-      </div>
-    </section>
-  );
-}
-
-function ContractPanel() {
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white">
-      <div className="flex items-center gap-2 border-b px-3 py-2 text-sm font-medium">
-        <CheckCircle2 className="size-4 text-emerald-600" />
-        Acceptance Map
-      </div>
-      <div className="max-h-[300px] overflow-auto p-3">
-        <div className="space-y-2">
-          {ACCEPTANCE_MATRIX.map((item) => (
-            <details className="rounded-md border border-zinc-200 p-2" key={item.docSection}>
-              <summary className="cursor-pointer text-sm font-medium">
-                {item.docSection}
-              </summary>
-              <p className="mt-2 text-sm text-zinc-600">{item.requirement}</p>
-              <div className="mt-2 text-xs text-zinc-500">
-                {item.implementedBy.join(" · ")}
-              </div>
-            </details>
-          ))}
-        </div>
-        <div className="mt-3 border-t pt-3">
-          <div className="mb-2 text-xs font-medium uppercase text-zinc-500">
-            REST endpoints
-          </div>
-          <ul className="space-y-1 text-xs text-zinc-600">
-            {REST_ENDPOINTS.map((endpoint) => (
-              <li key={endpoint}>{endpoint}</li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    </section>
-  );
+export function ReadAgentChatPanel() {
+  return <ReadAgentWorkbench />;
 }

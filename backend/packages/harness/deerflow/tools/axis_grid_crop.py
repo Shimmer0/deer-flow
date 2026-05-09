@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
-
 _HARNESS_CONTAINER_PATH = "/mnt/harness-workbench"
 _GPT_PRO_CONTAINER_PATH = "/mnt/gpt-pro"
+_CROP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 
 
 def _lab_root() -> Path:
@@ -142,6 +143,8 @@ def create_axis_context_crop(
     min_strip_px: int = 96,
 ) -> dict[str, Any]:
     """Create a grid crop with surrounding axis-label context strips."""
+    if not _CROP_ID_RE.fullmatch(crop_id):
+        raise ValueError("crop_id must match ^[A-Za-z0-9_.-]{1,120}$")
     resolved_image = _resolve_input_path(image_path)
     resolved_output = _resolve_output_dir(output_dir)
     crop_box = _bbox(crop_bbox_px, "crop_bbox_px")
@@ -198,8 +201,10 @@ def create_axis_context_crop(
         canvas.paste(image, (left_w, top_h + main_h))
         components["bottom_strip"] = meta
 
-    image_out = resolved_output / f"{crop_id}.png"
-    meta_out = resolved_output / f"{crop_id}.meta.json"
+    image_out = (resolved_output / f"{crop_id}.png").resolve()
+    meta_out = (resolved_output / f"{crop_id}.meta.json").resolve()
+    image_out.relative_to(resolved_output.resolve())
+    meta_out.relative_to(resolved_output.resolve())
     result = {
         "status": "pass",
         "crop_id": crop_id,

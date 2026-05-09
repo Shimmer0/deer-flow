@@ -59,6 +59,7 @@ import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
+import { useLocalSettings } from "@/core/settings";
 import type { AgentThreadContext } from "@/core/threads";
 import { textOfMessage } from "@/core/threads/utils";
 import { cn } from "@/lib/utils";
@@ -151,9 +152,11 @@ export function InputBox({
   const searchParams = useSearchParams();
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const { models } = useModels();
+  const [localSettings] = useLocalSettings();
   const { thread, isMock } = useThread();
   const { textInput } = usePromptInputController();
   const promptRootRef = useRef<HTMLDivElement | null>(null);
+  const followupsEnabled = localSettings.followups.enabled;
 
   const [followups, setFollowups] = useState<string[]>([]);
   const [followupsHidden, setFollowupsHidden] = useState(false);
@@ -347,6 +350,7 @@ export function InputBox({
   const showFollowups =
     !disabled &&
     !isWelcomeMode &&
+    followupsEnabled &&
     !followupsHidden &&
     (followupsLoading || followups.length > 0);
 
@@ -372,6 +376,13 @@ export function InputBox({
     const streaming = status === "streaming";
     const wasStreaming = wasStreamingRef.current;
     wasStreamingRef.current = streaming;
+    if (!followupsEnabled) {
+      setFollowups([]);
+      setFollowupsLoading(false);
+      setFollowupsHidden(true);
+      return;
+    }
+
     if (!wasStreaming || streaming) {
       return;
     }
@@ -439,7 +450,14 @@ export function InputBox({
       });
 
     return () => controller.abort();
-  }, [context.model_name, disabled, isMock, status, threadId]);
+  }, [
+    context.model_name,
+    disabled,
+    followupsEnabled,
+    isMock,
+    status,
+    threadId,
+  ]);
 
   return (
     <div ref={promptRootRef} className="relative flex flex-col gap-4">

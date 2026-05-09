@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
@@ -28,6 +29,12 @@ import { useLocalSettings, useThreadSettings } from "@/core/settings";
 import { useThreadStream } from "@/core/threads/hooks";
 import { textOfMessage } from "@/core/threads/utils";
 import { env } from "@/env";
+import {
+  READ_AGENT_WORKSPACE_SEARCH_PARAM,
+  READ_AGENT_WORKSPACE_SEARCH_VALUE,
+  buildReadAgentThreadPath,
+} from "@/features/read-agent/model";
+import { ReadAgentChatPanel } from "@/features/read-agent/workbench";
 import { cn } from "@/lib/utils";
 
 export default function ChatPage() {
@@ -44,6 +51,10 @@ export default function ChatPage() {
   const [settings, setSettings] = useThreadSettings(threadId);
   const [localSettings, setLocalSettings] = useLocalSettings();
   const { tokenUsageEnabled } = useModels();
+  const searchParams = useSearchParams();
+  const isReadAgentMode =
+    searchParams.get(READ_AGENT_WORKSPACE_SEARCH_PARAM) ===
+    READ_AGENT_WORKSPACE_SEARCH_VALUE;
   const mountedRef = useRef(false);
   useSpecificChatMode();
 
@@ -82,7 +93,13 @@ export default function ChatPage() {
       setThreadId(createdThreadId);
       setIsNewThread(false);
       // ! Important: Never use next.js router for navigation in this case, otherwise it will cause the thread to re-mount and lose all states. Use native history API instead.
-      history.replaceState(null, "", `/workspace/chats/${createdThreadId}`);
+      history.replaceState(
+        null,
+        "",
+        isReadAgentMode
+          ? buildReadAgentThreadPath(createdThreadId)
+          : `/workspace/chats/${createdThreadId}`,
+      );
     },
     onFinish: (state) => {
       if (document.hidden || !document.hasFocus()) {
@@ -119,6 +136,13 @@ export default function ChatPage() {
   const tokenUsageInlineMode = tokenUsageEnabled
     ? localSettings.tokenUsage.inlineMode
     : "off";
+  const inputBoxStatus = thread.error
+    ? "error"
+    : thread.isLoading
+      ? "streaming"
+      : "ready";
+  const inputBoxDisabled =
+    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" || isUploading;
 
   return (
     <ThreadContext.Provider value={{ thread, isMock }}>
@@ -127,7 +151,7 @@ export default function ChatPage() {
           <header
             className={cn(
               "absolute top-0 right-0 left-0 z-30 flex h-12 shrink-0 items-center px-4",
-              isWelcomeMode
+              isWelcomeMode && !isReadAgentMode
                 ? "bg-background/0 backdrop-blur-none"
                 : "bg-background/80 shadow-xs backdrop-blur",
             )}
@@ -149,82 +173,130 @@ export default function ChatPage() {
             </div>
           </header>
           <main className="flex min-h-0 max-w-full grow flex-col">
-            <div className="flex size-full justify-center">
-              <MessageList
-                className={cn("size-full", !isWelcomeMode && "pt-10")}
-                threadId={threadId}
-                thread={thread}
-                paddingBottom={messageListPaddingBottom}
-                hasMoreHistory={hasMoreHistory}
-                loadMoreHistory={loadMoreHistory}
-                isHistoryLoading={isHistoryLoading}
-                tokenUsageInlineMode={tokenUsageInlineMode}
-              />
-            </div>
-            <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
-              <div
-                className={cn(
-                  "relative w-full",
-                  isWelcomeMode && "-translate-y-[calc(50vh-96px)]",
-                  isWelcomeMode
-                    ? "max-w-(--container-width-sm)"
-                    : "max-w-(--container-width-md)",
-                )}
-              >
-                <div className="absolute -top-4 right-0 left-0 z-0">
-                  <div className="absolute right-0 bottom-0 left-0">
-                    <TodoList
-                      className="bg-background/5"
-                      todos={thread.values.todos ?? []}
-                      hidden={
-                        !thread.values.todos || thread.values.todos.length === 0
-                      }
+            {isReadAgentMode ? (
+              <div className="grid size-full min-h-0 gap-3 px-3 pt-14 pb-36 lg:grid-cols-[minmax(320px,0.85fr)_minmax(520px,1.15fr)]">
+                <section
+                  className="border-border bg-background flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border"
+                  data-testid="read-agent-chat-column"
+                >
+                  <div className="min-h-0 flex-1">
+                    <MessageList
+                      className="size-full"
+                      threadId={threadId}
+                      thread={thread}
+                      paddingBottom={messageListPaddingBottom}
+                      hasMoreHistory={hasMoreHistory}
+                      loadMoreHistory={loadMoreHistory}
+                      isHistoryLoading={isHistoryLoading}
+                      tokenUsageInlineMode={tokenUsageInlineMode}
                     />
                   </div>
-                </div>
-                {mountedRef.current ? (
-                  <InputBox
-                    className={cn("bg-background/5 w-full -translate-y-4")}
-                    isWelcomeMode={isWelcomeMode}
-                    threadId={threadId}
-                    autoFocus={isWelcomeMode}
-                    status={
-                      thread.error
-                        ? "error"
-                        : thread.isLoading
-                          ? "streaming"
-                          : "ready"
-                    }
-                    context={settings.context}
-                    extraHeader={
-                      isWelcomeMode && <Welcome mode={settings.context.mode} />
-                    }
-                    disabled={
-                      env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
-                      isUploading
-                    }
-                    onContextChange={(context) =>
-                      setSettings("context", context)
-                    }
-                    onFollowupsVisibilityChange={setShowFollowups}
-                    onSubmit={handleSubmit}
-                    onStop={handleStop}
-                  />
-                ) : (
-                  <div
-                    aria-hidden="true"
-                    className={cn(
-                      "bg-background/5 h-32 w-full -translate-y-4 rounded-2xl",
+                  <div className="bg-background/95 shrink-0 border-t p-3">
+                    {mountedRef.current ? (
+                      <InputBox
+                        className="bg-background w-full"
+                        isWelcomeMode={false}
+                        threadId={threadId}
+                        autoFocus={false}
+                        status={inputBoxStatus}
+                        context={settings.context}
+                        disabled={inputBoxDisabled}
+                        onContextChange={(context) =>
+                          setSettings("context", context)
+                        }
+                        onFollowupsVisibilityChange={setShowFollowups}
+                        onSubmit={handleSubmit}
+                        onStop={handleStop}
+                      />
+                    ) : (
+                      <div
+                        aria-hidden="true"
+                        className="bg-background h-32 w-full rounded-2xl"
+                      />
                     )}
-                  />
-                )}
-                {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
-                  <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
-                    {t.common.notAvailableInDemoMode}
+                    {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
+                      <div className="text-muted-foreground/67 mt-2 w-full text-center text-xs">
+                        {t.common.notAvailableInDemoMode}
+                      </div>
+                    )}
                   </div>
-                )}
+                </section>
+                <ReadAgentChatPanel />
               </div>
-            </div>
+            ) : (
+              <div className="flex size-full justify-center">
+                <MessageList
+                  className={cn("size-full", !isWelcomeMode && "pt-10")}
+                  threadId={threadId}
+                  thread={thread}
+                  paddingBottom={messageListPaddingBottom}
+                  hasMoreHistory={hasMoreHistory}
+                  loadMoreHistory={loadMoreHistory}
+                  isHistoryLoading={isHistoryLoading}
+                  tokenUsageInlineMode={tokenUsageInlineMode}
+                />
+              </div>
+            )}
+            {!isReadAgentMode && (
+              <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">
+                <div
+                  className={cn(
+                    "relative w-full",
+                    isWelcomeMode && "-translate-y-[calc(50vh-96px)]",
+                    isWelcomeMode
+                      ? "max-w-(--container-width-sm)"
+                      : "max-w-(--container-width-md)",
+                  )}
+                >
+                  <div className="absolute -top-4 right-0 left-0 z-0">
+                    <div className="absolute right-0 bottom-0 left-0">
+                      <TodoList
+                        className="bg-background/5"
+                        todos={thread.values.todos ?? []}
+                        hidden={
+                          !thread.values.todos ||
+                          thread.values.todos.length === 0
+                        }
+                      />
+                    </div>
+                  </div>
+                  {mountedRef.current ? (
+                    <InputBox
+                      className={cn("bg-background/5 w-full -translate-y-4")}
+                      isWelcomeMode={isWelcomeMode}
+                      threadId={threadId}
+                      autoFocus={isWelcomeMode}
+                      status={inputBoxStatus}
+                      context={settings.context}
+                      extraHeader={
+                        isWelcomeMode && (
+                          <Welcome mode={settings.context.mode} />
+                        )
+                      }
+                      disabled={inputBoxDisabled}
+                      onContextChange={(context) =>
+                        setSettings("context", context)
+                      }
+                      onFollowupsVisibilityChange={setShowFollowups}
+                      onSubmit={handleSubmit}
+                      onStop={handleStop}
+                    />
+                  ) : (
+                    <div
+                      aria-hidden="true"
+                      className={cn(
+                        "bg-background/5 h-32 w-full -translate-y-4 rounded-2xl",
+                      )}
+                    />
+                  )}
+                  {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
+                    <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
+                      {t.common.notAvailableInDemoMode}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </main>
         </div>
       </ChatBox>

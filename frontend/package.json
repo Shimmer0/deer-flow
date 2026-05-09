@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "demo:save": "node scripts/save-demo.js",
+    "audit:debug-export": "node scripts/debug-export-browser-audit.mjs",
     "build": "next build",
     "check": "eslint . --ext .ts,.tsx && tsc --noEmit",
     "dev": "next dev --turbo",
@@ -74,6 +74,7 @@
     "nextra-theme-docs": "^4.6.1",
     "nuxt-og-image": "^5.1.13",
     "ogl": "^1.0.11",
+    "openseadragon": "^6.0.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-resizable-panels": "^4.4.1",

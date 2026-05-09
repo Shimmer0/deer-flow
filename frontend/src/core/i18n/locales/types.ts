@@ -38,7 +38,10 @@ export interface Translations {
     export: string;
     exportAsMarkdown: string;
     exportAsJSON: string;
+    exportDebugJSON: string;
+    exportDebugArchive: string;
     exportSuccess: string;
+    exportFailed: string;
   };
 
   home: {
@@ -273,6 +276,82 @@ export interface Translations {
     toggleSidebar: string;
   };
 
+  readAgent: {
+    title: string;
+    compactTitle: string;
+    projectSubtitle: string;
+    language: string;
+    project: string;
+    blueprint: string;
+    floor: string;
+    toolResponse: string;
+    recognitionTool: string;
+    uploadDrawing: string;
+    processingMode: string;
+    editMode: string;
+    replayTrace: string;
+    panels: {
+      progress: string;
+      semanticCanvas: string;
+      threeDPreview: string;
+      developerView: string;
+      jsonDiffAudit: string;
+      inspector: string;
+      operationPreview: string;
+      auditTrail: string;
+      acceptanceMap: string;
+    };
+    helper: {
+      semanticCanvas: string;
+      developerView: string;
+      operationPreview: string;
+      auditTrail: string;
+      acceptanceMap: string;
+      schematicOnly: string;
+    };
+    fields: {
+      beamLabel: string;
+      section: string;
+      reviewStatus: string;
+      confidence: string;
+      stageJson: string;
+      viewModel: string;
+      diff: string;
+      patch: string;
+      audit: string;
+      restEndpoints: string;
+      implementedBy: string;
+      testedBy: string;
+    };
+    actions: {
+      undo: string;
+      redo: string;
+      ocrRegion: string;
+      commit: string;
+    };
+    status: {
+      candidate: string;
+      needsReview: string;
+      accepted: string;
+      rejected: string;
+    };
+    locks: {
+      lockedByYou: string;
+      lockedByOther: (owner: string) => string;
+      available: string;
+    };
+    empty: {
+      noObject: string;
+      noOperations: string;
+    };
+    counters: {
+      events: (count: number) => string;
+      objects: (count: number) => string;
+      changedPaths: (count: number) => string;
+      diffSummary: (engine: string, paths: number, bytes: number) => string;
+    };
+  };
+
   // Settings
   settings: {
     title: string;
@@ -280,6 +359,7 @@ export interface Translations {
     sections: {
       account: string;
       appearance: string;
+      chat: string;
       memory: string;
       tools: string;
       skills: string;
@@ -370,6 +450,12 @@ export interface Translations {
       darkDescription: string;
       languageTitle: string;
       languageDescription: string;
+    };
+    chat: {
+      title: string;
+      description: string;
+      followupSuggestionsTitle: string;
+      followupSuggestionsDescription: string;
     };
     tools: {
       title: string;

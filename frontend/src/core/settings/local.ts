@@ -5,6 +5,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
   notification: {
     enabled: true,
   },
+  followups: {
+    enabled: false,
+  },
   tokenUsage: {
     headerTotal: true,
     inlineMode: "per_turn",
@@ -25,6 +28,9 @@ function isBrowser(): boolean {
 
 export interface LocalSettings {
   notification: {
+    enabled: boolean;
+  };
+  followups: {
     enabled: boolean;
   };
   tokenUsage: {
@@ -60,6 +66,10 @@ function mergeLocalSettings(settings?: Partial<LocalSettings>): LocalSettings {
     notification: {
       ...DEFAULT_LOCAL_SETTINGS.notification,
       ...settings?.notification,
+    },
+    followups: {
+      ...DEFAULT_LOCAL_SETTINGS.followups,
+      ...settings?.followups,
     },
   };
 }

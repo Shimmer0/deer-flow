@@ -173,6 +173,9 @@ importers:
       ogl:
         specifier: ^1.0.11
         version: 1.0.11
+      openseadragon:
+        specifier: ^6.0.2
+        version: 6.0.2
       react:
         specifier: ^19.0.0
         version: 19.2.4
@@ -4519,6 +4522,9 @@ packages:
 
   oniguruma-to-es@4.3.4:
     resolution: {integrity: sha512-3VhUGN3w2eYxnTzHn+ikMI+fp/96KoRSVK9/kMTcFqj1NRDh2IhQCKvYxDnWePKRXY/AqH+Fuiyb7VHSzBjHfA==}
+
+  openseadragon@6.0.2:
+    resolution: {integrity: sha512-WNPPQWp9sHunyzkV9J2yhfxnSfDF9CfBsE6unmkdxh1uTWzFcueMvBPhmuZdY7M1v/ffJ3NdaF3Qq3jogphIbA==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -10776,6 +10782,8 @@ snapshots:
       oniguruma-parser: 0.12.1
       regex: 6.1.0
       regex-recursion: 6.0.2
+
+  openseadragon@6.0.2: {}
 
   optionator@0.9.4:
     dependencies:

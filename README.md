@@ -112,92 +112,33 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
    make setup
    ```
 
-   This launches an interactive wizard that guides you through choosing an LLM provider, optional web search, and execution/safety preferences such as sandbox mode, bash access, and file-write tools. It generates a minimal `config.yaml` and writes your keys to `.env`. Takes about 2 minutes.
-
-   The wizard also lets you configure an optional web search provider, or skip it for now.
+   This repository's local Agent Lab route is fixed to the DashScope Coding Anthropic-compatible endpoint. `make setup` keeps the existing `config.yaml` aligned with that route and writes runtime secrets to `.env` when needed.
 
    Run `make doctor` at any time to verify your setup and get actionable fix hints.
 
-   > **Advanced / manual configuration**: If you prefer to edit `config.yaml` directly, run `make config` instead to copy the full template. See `config.example.yaml` for the complete reference including CLI-backed providers (Codex CLI, Claude Code OAuth), OpenRouter, Responses API, and more.
+   > **Advanced / manual configuration**: For this Agent Lab checkout, keep `config.yaml` on `root-anthropic` and use only `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_MODEL` for the active runtime.
 
    <details>
-   <summary>Manual model configuration examples</summary>
+   <summary>Manual model configuration for this Agent Lab checkout</summary>
 
    ```yaml
    models:
-     - name: gpt-4o
-       display_name: GPT-4o
-       use: langchain_openai:ChatOpenAI
-       model: gpt-4o
-       api_key: $OPENAI_API_KEY
-
-     - name: openrouter-gemini-2.5-flash
-       display_name: Gemini 2.5 Flash (OpenRouter)
-       use: langchain_openai:ChatOpenAI
-       model: google/gemini-2.5-flash-preview
-       api_key: $OPENROUTER_API_KEY
-       base_url: https://openrouter.ai/api/v1
-
-     - name: gpt-5-responses
-       display_name: GPT-5 (Responses API)
-       use: langchain_openai:ChatOpenAI
-       model: gpt-5
-       api_key: $OPENAI_API_KEY
-       use_responses_api: true
-       output_version: responses/v1
-
-     - name: qwen3-32b-vllm
-       display_name: Qwen3 32B (vLLM)
-       use: deerflow.models.vllm_provider:VllmChatModel
-       model: Qwen/Qwen3-32B
-       api_key: $VLLM_API_KEY
-       base_url: http://localhost:8000/v1
-       supports_thinking: true
-       when_thinking_enabled:
-         extra_body:
-           chat_template_kwargs:
-             enable_thinking: true
-   ```
-
-   OpenRouter and similar OpenAI-compatible gateways should be configured with `langchain_openai:ChatOpenAI` plus `base_url`. If you prefer a provider-specific environment variable name, point `api_key` at that variable explicitly (for example `api_key: $OPENROUTER_API_KEY`).
-
-   To route OpenAI models through `/v1/responses`, keep using `langchain_openai:ChatOpenAI` and set `use_responses_api: true` with `output_version: responses/v1`.
-
-   For vLLM 0.19.0, use `deerflow.models.vllm_provider:VllmChatModel`. For Qwen-style reasoning models, DeerFlow toggles reasoning with `extra_body.chat_template_kwargs.enable_thinking` and preserves vLLM's non-standard `reasoning` field across multi-turn tool-call conversations. Legacy `thinking` configs are normalized automatically for backward compatibility. Reasoning models may also require the server to be started with `--reasoning-parser ...`. If your local vLLM deployment accepts any non-empty API key, you can still set `VLLM_API_KEY` to a placeholder value.
-
-   CLI-backed provider examples:
-
-   ```yaml
-   models:
-     - name: gpt-5.4
-       display_name: GPT-5.4 (Codex CLI)
-       use: deerflow.models.openai_codex_provider:CodexChatModel
-       model: gpt-5.4
-       supports_thinking: true
-       supports_reasoning_effort: true
-
-     - name: claude-sonnet-4.6
-       display_name: Claude Sonnet 4.6 (Claude Code OAuth)
-       use: deerflow.models.claude_provider:ClaudeChatModel
-       model: claude-sonnet-4-6
+     - name: root-anthropic
+       display_name: DashScope Coding Anthropic
+       use: langchain_anthropic:ChatAnthropic
+       model: $ANTHROPIC_MODEL
+       anthropic_api_key: $ANTHROPIC_AUTH_TOKEN
+       anthropic_api_url: $ANTHROPIC_BASE_URL
        max_tokens: 4096
        supports_thinking: true
    ```
 
-   - Codex CLI reads `~/.codex/auth.json`
-   - Claude Code accepts `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_CREDENTIALS_PATH`, or `~/.claude/.credentials.json`
-   - ACP agent entries are separate from model providers — if you configure `acp_agents.codex`, point it at a Codex ACP adapter such as `npx -y @zed-industries/codex-acp`
-   - On macOS, export Claude Code auth explicitly if needed:
+   Runtime variables can be set in `deer-flow/.env`:
 
    ```bash
-   eval "$(python3 scripts/export_claude_code_oauth.py --print-export)"
-   ```
-
-   API keys can also be set manually in `.env` (recommended) or exported in your shell:
-
-   ```bash
-   OPENAI_API_KEY=your-openai-api-key
-   TAVILY_API_KEY=your-tavily-api-key
+   ANTHROPIC_AUTH_TOKEN=your-token
+   ANTHROPIC_BASE_URL=https://coding.dashscope.aliyuncs.com/apps/anthropic
+   ANTHROPIC_MODEL=qwen3.6-plus
    ```
 
    </details>
@@ -654,7 +595,7 @@ This is the difference between a chatbot with tool access and an agent with an a
 
 **Summarization**: Within a session, DeerFlow manages context aggressively — summarizing completed sub-tasks, offloading intermediate results to the filesystem, compressing what's no longer immediately relevant. This lets it stay sharp across long, multi-step tasks without blowing the context window.
 
-**Strict Tool-Call Recovery**: When a provider or middleware interrupts a tool-call loop, DeerFlow now strips provider-level raw tool-call metadata on forced-stop assistant messages and injects placeholder tool results for dangling calls before the next model invocation. This keeps OpenAI-compatible reasoning models that strictly validate `tool_call_id` sequences from failing with malformed history errors.
+**Strict Tool-Call Recovery**: When a provider or middleware interrupts a tool-call loop, DeerFlow strips provider-level raw tool-call metadata on forced-stop assistant messages and injects placeholder tool results for dangling calls before the next model invocation. This keeps strict tool-call validators from failing on malformed history.
 
 ### Long-Term Memory
 
@@ -666,7 +607,7 @@ Memory updates now skip duplicate fact entries at apply time, so repeated prefer
 
 ## Recommended Models
 
-DeerFlow is model-agnostic — it works with any LLM that implements the OpenAI-compatible API. That said, it performs best with models that support:
+This Agent Lab checkout is configured for DashScope Coding's Anthropic-compatible endpoint. It performs best with models that support:
 
 - **Long context windows** (100k+ tokens) for deep research and multi-step tasks
 - **Reasoning capabilities** for adaptive planning and complex decomposition

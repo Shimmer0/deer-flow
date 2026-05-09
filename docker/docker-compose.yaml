@@ -25,7 +25,7 @@
 services:
   # ── Reverse Proxy ──────────────────────────────────────────────────────────
   nginx:
-    image: nginx:alpine
+    image: ${NGINX_IMAGE:-nginx:alpine}
     container_name: deer-flow-nginx
     ports:
       - "${PORT:-2026}:2026"
@@ -77,6 +77,8 @@ services:
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
       - ../skills:/app/skills:ro
       - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
+      # Host Paddle OCR conda env used by run_python_script via DEER_FLOW_PYTHON_INTERPRETER.
+      - /home/s/miniconda3/envs/paddleocr:/home/s/miniconda3/envs/paddleocr:ro
       # DooD: AioSandboxProvider starts sandbox containers via host Docker daemon
       - ${DEER_FLOW_DOCKER_SOCKET}:/var/run/docker.sock
       # CLI auth directories for auto-auth (Claude Code + Codex CLI)

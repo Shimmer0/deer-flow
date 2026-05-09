@@ -6,12 +6,7 @@ import { useI18nContext } from "./context";
 import { getLocaleFromCookie, setLocaleInCookie } from "./cookies";
 import { translations } from "./translations";
 
-import {
-  DEFAULT_LOCALE,
-  detectLocale,
-  normalizeLocale,
-  type Locale,
-} from "./index";
+import { DEFAULT_LOCALE, normalizeLocale, type Locale } from "./index";
 
 export function useI18n() {
   const { locale, setLocale } = useI18nContext();
@@ -35,9 +30,8 @@ export function useI18n() {
       return;
     }
 
-    const detected = detectLocale();
-    setLocale(detected);
-    setLocaleInCookie(detected);
+    setLocale(DEFAULT_LOCALE);
+    setLocaleInCookie(DEFAULT_LOCALE);
   }, [setLocale]);
 
   return {

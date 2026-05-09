@@ -22,8 +22,10 @@ Docker provides a consistent, isolated environment with all dependencies pre-con
    # Copy example configuration
    cp config.example.yaml config.yaml
 
-   # Set your API keys
-   export OPENAI_API_KEY="your-key-here"
+   # Set your API key for the local Agent Lab route
+   export ANTHROPIC_AUTH_TOKEN="your-key-here"
+   export ANTHROPIC_BASE_URL="https://coding.dashscope.aliyuncs.com/apps/anthropic"
+   export ANTHROPIC_MODEL="qwen3.6-plus"
    # or edit config.yaml directly
    ```
 

@@ -8,12 +8,58 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 _HARNESS_CONTAINER_PATH = "/mnt/harness-workbench"
 _PROMPT_CONTAINER_PATH = "/mnt/prompt-workbench"
 _GPT_PRO_CONTAINER_PATH = "/mnt/gpt-pro"
 _MAX_TIMEOUT_SECONDS = 60
 _MAX_OUTPUT_CHARS = 12000
+
+_SECRET_REDACTION_PATTERNS = [
+    ("OPENAI_API_KEY", "OPENAI_API_KEY=<redacted>"),
+    ("READ_AGENT_LLM_API_KEY", "READ_AGENT_LLM_API_KEY=<redacted>"),
+    ("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY=<redacted>"),
+]
+
+
+def _host_python_enabled() -> bool:
+    return os.environ.get("DEER_FLOW_ALLOW_HOST_PYTHON_SCRIPTS", "").lower() in {"1", "true", "yes"}
+
+
+def _allowlist() -> set[str]:
+    raw = os.environ.get("DEER_FLOW_PYTHON_SCRIPT_ALLOWLIST", "")
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _script_allowed(script_path: str, resolved_script: Path) -> bool:
+    allowed = _allowlist()
+    if not allowed:
+        return False
+    normalized_request = posixpath.normpath(script_path)
+    resolved_text = str(resolved_script.resolve())
+    return normalized_request in allowed or resolved_text in allowed or resolved_script.name in allowed
+
+
+def _scrub_env() -> dict[str, str]:
+    # Deliberately do not pass the parent process environment. This prevents
+    # Agent-authored scripts from reading API tokens, cookies, or DB credentials.
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONPATH": str(_backend_root()),
+    }
+    if os.environ.get("DEER_FLOW_CONFIG_PATH_SAFE"):
+        env["DEER_FLOW_CONFIG_PATH"] = os.environ["DEER_FLOW_CONFIG_PATH_SAFE"]
+    return env
+
+
+def _redact(text: str) -> str:
+    redacted = text
+    for name, replacement in _SECRET_REDACTION_PATTERNS:
+        value = os.environ.get(name)
+        if value:
+            redacted = redacted.replace(value, "<redacted>")
+        redacted = redacted.replace(f"{name}=", replacement + " # ")
+    return redacted
 
 
 def _lab_root() -> Path:
@@ -25,6 +71,13 @@ def _backend_root() -> Path:
 
 
 def _venv_python() -> str:
+    configured = os.getenv("DEER_FLOW_PYTHON_INTERPRETER")
+    if configured:
+        candidate = Path(configured).expanduser()
+        if not candidate.exists():
+            raise FileNotFoundError(f"Configured Python interpreter not found: {configured}")
+        return str(candidate)
+
     candidate = _lab_root() / ".venv" / "bin" / "python"
     if candidate.exists():
         return str(candidate)
@@ -106,13 +159,20 @@ def _safe_args(args: list[str] | str | None) -> list[str]:
 
 
 def run_python_script_file(script_path: str, args: list[str] | str | None = None, timeout_seconds: int = 30) -> dict[str, Any]:
-    """Run a whitelisted Python script from the lab workbenches."""
+    """Run a strictly allowlisted Python script from the lab workbenches.
+
+    Production default is deny. Enable only in a sandbox with:
+    DEER_FLOW_ALLOW_HOST_PYTHON_SCRIPTS=true
+    DEER_FLOW_PYTHON_SCRIPT_ALLOWLIST=/absolute/script.py,/mnt/harness-workbench/tool.py
+    """
+    if not _host_python_enabled():
+        raise PermissionError("run_python_script is disabled by default. Set DEER_FLOW_ALLOW_HOST_PYTHON_SCRIPTS=true in a sandbox to enable it.")
     resolved_script = _resolve_script_path(script_path)
+    if not _script_allowed(script_path, resolved_script):
+        raise PermissionError("Python script is not in DEER_FLOW_PYTHON_SCRIPT_ALLOWLIST")
     safe_args = _safe_args(args)
     timeout = max(1, min(int(timeout_seconds), _MAX_TIMEOUT_SECONDS))
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(_backend_root())
-    env.setdefault("DEER_FLOW_CONFIG_PATH", str(_lab_root() / "deer-flow" / "config.yaml"))
+    env = _scrub_env()
 
     command = [_venv_python(), str(resolved_script), *safe_args]
     try:
@@ -121,8 +181,7 @@ def run_python_script_file(script_path: str, args: list[str] | str | None = None
             cwd=str(resolved_script.parent),
             env=env,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=timeout,
             check=False,
         )
@@ -144,8 +203,8 @@ def run_python_script_file(script_path: str, args: list[str] | str | None = None
         "timeout_seconds": timeout,
         "timed_out": timed_out,
         "exit_code": exit_code,
-        "stdout": stdout[-_MAX_OUTPUT_CHARS:],
-        "stderr": stderr[-_MAX_OUTPUT_CHARS:],
+        "stdout": _redact(stdout)[-_MAX_OUTPUT_CHARS:],
+        "stderr": _redact(stderr)[-_MAX_OUTPUT_CHARS:],
     }
 
 

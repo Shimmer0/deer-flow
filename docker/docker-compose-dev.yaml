@@ -62,7 +62,7 @@ services:
   # ── Reverse Proxy ──────────────────────────────────────────────────────
   # Routes API traffic to gateway and (optionally) provisioner.
   nginx:
-    image: nginx:alpine
+    image: ${NGINX_IMAGE:-nginx:alpine}
     container_name: deer-flow-nginx
     ports:
       - "2026:2026"
@@ -139,6 +139,8 @@ services:
       # On macOS/Docker Desktop, uv may fail to create symlinks inside shared
       # host directories, which causes startup-time `uv sync` to crash.
       - gateway-uv-cache:/root/.cache/uv
+      # Host Paddle OCR conda env used by run_python_script via DEER_FLOW_PYTHON_INTERPRETER.
+      - /home/s/miniconda3/envs/paddleocr:/home/s/miniconda3/envs/paddleocr:ro
       # DooD: AioSandboxProvider runs inside the Gateway process.
       - /var/run/docker.sock:/var/run/docker.sock
       # CLI auth directories for auto-auth (Claude Code + Codex CLI)

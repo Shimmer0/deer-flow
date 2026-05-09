@@ -30,9 +30,19 @@ echo "Checking pnpm..."
 if command -v pnpm >/dev/null 2>&1; then
     PNPM_VERSION=$(pnpm -v)
     echo "  ✓ pnpm $PNPM_VERSION"
+elif command -v pnpm.cmd >/dev/null 2>&1; then
+    PNPM_VERSION=$(pnpm.cmd -v)
+    echo "  ✓ pnpm $PNPM_VERSION"
+elif command -v corepack >/dev/null 2>&1; then
+    PNPM_VERSION=$(corepack pnpm -v)
+    echo "  ✓ pnpm $PNPM_VERSION (via Corepack)"
+elif command -v corepack.cmd >/dev/null 2>&1; then
+    PNPM_VERSION=$(corepack.cmd pnpm -v)
+    echo "  ✓ pnpm $PNPM_VERSION (via Corepack)"
 else
     echo "  ✗ pnpm not found"
     echo "    Install: npm install -g pnpm"
+    echo "    Or: corepack enable"
     echo "    Or visit: https://pnpm.io/installation"
     FAILED=1
 fi

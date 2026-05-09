@@ -21,6 +21,7 @@ from app.gateway.routers import (
     mcp,
     memory,
     models,
+    read_agent,
     runs,
     skills,
     suggestions,
@@ -336,6 +337,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Memory API is mounted at /api/memory
     app.include_router(memory.router)
+
+    # Read Agent real-loop API is mounted under /api/read-agent/*
+    app.include_router(read_agent.router)
 
     # Skills API is mounted at /api/skills
     app.include_router(skills.router)

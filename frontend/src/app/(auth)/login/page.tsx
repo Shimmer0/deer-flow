@@ -10,6 +10,7 @@ import { FlickeringGrid } from "@/components/ui/flickering-grid";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { parseAuthError } from "@/core/auth/types";
+import { getReadAgentLoginRedirectPath } from "@/features/read-agent/model";
 
 /**
  * Validate next parameter
@@ -58,7 +59,8 @@ export default function LoginPage() {
 
   // Get next parameter for validated redirect
   const nextParam = searchParams.get("next");
-  const redirectPath = validateNextParam(nextParam) ?? "/workspace";
+  const redirectPath =
+    validateNextParam(nextParam) ?? getReadAgentLoginRedirectPath();
 
   // Redirect if already authenticated (client-side, post-login)
   useEffect(() => {

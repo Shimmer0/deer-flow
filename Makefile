@@ -9,10 +9,12 @@ BACKEND_UV_RUN = cd backend && uv run
 ifeq ($(OS),Windows_NT)
     SHELL := cmd.exe
     PYTHON ?= python
+    PNPM ?= corepack pnpm
     # Run repo shell scripts through Git Bash when Make is launched from cmd.exe / PowerShell.
     RUN_WITH_GIT_BASH = call scripts\run-with-git-bash.cmd
 else
     PYTHON ?= python3
+    PNPM ?= $(shell if command -v pnpm >/dev/null 2>&1; then printf "pnpm"; elif command -v pnpm.cmd >/dev/null 2>&1; then printf "pnpm.cmd"; elif command -v corepack >/dev/null 2>&1; then printf "corepack pnpm"; elif command -v corepack.cmd >/dev/null 2>&1; then printf "corepack.cmd pnpm"; else printf "pnpm"; fi)
     RUN_WITH_GIT_BASH =
 endif
 
@@ -66,7 +68,7 @@ install:
 	@echo "Installing backend dependencies..."
 	@cd backend && uv sync
 	@echo "Installing frontend dependencies..."
-	@cd frontend && pnpm install
+	@cd frontend && $(PNPM) install
 	@echo "Installing pre-commit hooks..."
 	@$(BACKEND_UV_RUN) --with pre-commit pre-commit install
 	@echo "✓ All dependencies installed"

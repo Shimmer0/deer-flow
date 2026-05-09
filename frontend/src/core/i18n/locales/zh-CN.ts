@@ -49,7 +49,10 @@ export const zhCN: Translations = {
     export: "导出",
     exportAsMarkdown: "导出为 Markdown",
     exportAsJSON: "导出为 JSON",
+    exportDebugJSON: "导出调试 JSON",
+    exportDebugArchive: "导出调试 ZIP",
     exportSuccess: "对话已导出",
+    exportFailed: "导出失败",
   },
 
   // Home
@@ -330,6 +333,83 @@ export const zhCN: Translations = {
     toggleSidebar: "切换侧边栏",
   },
 
+  readAgent: {
+    title: "结构图纸识读工作台",
+    compactTitle: "图纸识读",
+    projectSubtitle: "项目级读图、证据核验与构件修订",
+    language: "语言",
+    project: "项目",
+    blueprint: "图纸",
+    floor: "楼层",
+    toolResponse: "识图工具",
+    recognitionTool: "识图工具",
+    uploadDrawing: "上传图纸",
+    processingMode: "识图中",
+    editMode: "编辑",
+    replayTrace: "重播进度",
+    panels: {
+      progress: "识图进度",
+      semanticCanvas: "图纸语义视图",
+      threeDPreview: "三维示意",
+      developerView: "开发者视图",
+      jsonDiffAudit: "JSON / 差异 / 审计",
+      inspector: "构件检查与证据",
+      operationPreview: "提交前校验",
+      auditTrail: "修改记录",
+      acceptanceMap: "验收映射",
+    },
+    helper: {
+      semanticCanvas: "选择梁、柱、轴网或标签后，在右侧核验证据并提交修订。",
+      developerView: "查看原始语义模型、JSON 差异、审计事件和接口验收信息。",
+      operationPreview: "提交前展示本次修改、校验结果和即将写入的审计事件。",
+      auditTrail: "所有已提交修改都会写入审计记录，便于回溯。",
+      acceptanceMap: "GPT_PRO 文档要求与当前实现、测试和 REST 接口的对应关系。",
+      schematicOnly: "示意模型，不可用于工程计算",
+    },
+    fields: {
+      beamLabel: "梁号",
+      section: "截面",
+      reviewStatus: "复核状态",
+      confidence: "置信度",
+      stageJson: "阶段 JSON",
+      viewModel: "视图模型",
+      diff: "差异",
+      patch: "补丁",
+      audit: "审计",
+      restEndpoints: "REST 接口",
+      implementedBy: "实现位置",
+      testedBy: "测试覆盖",
+    },
+    actions: {
+      undo: "撤销",
+      redo: "重做",
+      ocrRegion: "识别证据区域",
+      commit: "提交修改",
+    },
+    status: {
+      candidate: "候选",
+      needsReview: "待复核",
+      accepted: "已确认",
+      rejected: "已驳回",
+    },
+    locks: {
+      lockedByYou: "已由你锁定",
+      lockedByOther: (owner: string) => `已由 ${owner} 锁定`,
+      available: "可编辑",
+    },
+    empty: {
+      noObject: "尚未选择构件",
+      noOperations: "还没有提交修改",
+    },
+    counters: {
+      events: (count: number) => `${count} 条事件`,
+      objects: (count: number) => `${count} 个对象`,
+      changedPaths: (count: number) => `${count} 个变更路径`,
+      diffSummary: (engine: string, paths: number, bytes: number) =>
+        `${engine} 差异，${paths} 个变更路径，${bytes} 字节`,
+    },
+  },
+
   // Settings
   settings: {
     title: "设置",
@@ -337,6 +417,7 @@ export const zhCN: Translations = {
     sections: {
       account: "账号",
       appearance: "外观",
+      chat: "聊天",
       memory: "记忆",
       tools: "工具",
       skills: "技能",
@@ -431,6 +512,13 @@ export const zhCN: Translations = {
       darkDescription: "更暗的配色，减少眩光方便专注。",
       languageTitle: "语言",
       languageDescription: "在不同语言之间切换。",
+    },
+    chat: {
+      title: "聊天",
+      description: "控制聊天线程中的助手行为。",
+      followupSuggestionsTitle: "生成可能的后续问题",
+      followupSuggestionsDescription:
+        "助手回复结束后，自动生成可能继续追问的问题。",
     },
     tools: {
       title: "工具",

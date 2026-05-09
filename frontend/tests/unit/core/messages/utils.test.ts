@@ -63,3 +63,28 @@ test("aggregates token usage messages once per assistant turn", () => {
     ),
   ).toEqual([null, null, ["ai-1", "ai-2"], null, ["ai-3"]]);
 });
+
+test("uses unique group ids when one assistant message has reasoning and content", () => {
+  const messages = [
+    {
+      id: "human-1",
+      type: "human",
+      content: "Read the plan",
+    },
+    {
+      id: "ai-1",
+      type: "ai",
+      content: "The answer",
+      additional_kwargs: { reasoning_content: "I checked the tool output" },
+    },
+  ] as Message[];
+
+  const groups = getMessageGroups(messages);
+
+  expect(groups.map((group) => group.type)).toEqual([
+    "human",
+    "assistant:processing",
+    "assistant",
+  ]);
+  expect(new Set(groups.map((group) => group.id)).size).toBe(groups.length);
+});
